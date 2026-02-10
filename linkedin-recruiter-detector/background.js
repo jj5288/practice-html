@@ -8,6 +8,7 @@
 const DEFAULT_SETTINGS = {
   enabled: true,
   desktopNotifications: true,
+  autoOpenCandidates: true,
   soundAlert: false,
 };
 
@@ -25,11 +26,15 @@ chrome.storage.sync.get("settings", (result) => {
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "NOTIFICATION_DETECTED") {
-    handleNotificationDetected(message);
+    handleNotificationDetected(message, sender);
   }
 
   if (message.type === "NOTIFICATIONS_CLEARED") {
     handleNotificationsCleared();
+  }
+
+  if (message.type === "CANDIDATE_LINKS_FOUND") {
+    openCandidateTabs(message.candidateUrls, sender);
   }
 
   if (message.type === "GET_SETTINGS") {
@@ -51,8 +56,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-function handleNotificationDetected(message) {
-  const { count } = message;
+function handleNotificationDetected(message, sender) {
+  const { count, candidateUrls, isNewNotification } = message;
   currentCount = count;
 
   // Update the extension badge
@@ -67,6 +72,34 @@ function handleNotificationDetected(message) {
       title: "LinkedIn Recruiter",
       message: `You have ${count} new notification${count !== 1 ? "s" : ""} in LinkedIn Recruiter!`,
       priority: 2,
+    });
+  }
+
+  // Auto-open candidate profiles in new tabs
+  if (isNewNotification && candidateUrls && candidateUrls.length > 0) {
+    openCandidateTabs(candidateUrls, sender);
+  }
+}
+
+/**
+ * Opens candidate profile URLs in new background tabs.
+ * Notifies the content script which URLs were opened so it can track them.
+ */
+function openCandidateTabs(urls, sender) {
+  if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
+
+  const opened = [];
+  for (const url of urls) {
+    chrome.tabs.create({ url, active: false }, () => {
+      opened.push(url);
+
+      // After opening all tabs, notify content script to track them
+      if (opened.length === urls.length && sender && sender.tab) {
+        chrome.tabs.sendMessage(sender.tab.id, {
+          type: "TABS_OPENED",
+          urls: opened,
+        });
+      }
     });
   }
 }

@@ -7,6 +7,7 @@ const statusText = document.getElementById("statusText");
 const countDisplay = document.getElementById("countDisplay");
 const toggleEnabled = document.getElementById("toggleEnabled");
 const toggleDesktop = document.getElementById("toggleDesktop");
+const toggleAutoOpen = document.getElementById("toggleAutoOpen");
 
 // Load current state from background
 chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
@@ -22,6 +23,7 @@ chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
 
   toggleEnabled.checked = settings.enabled;
   toggleDesktop.checked = settings.desktopNotifications;
+  toggleAutoOpen.checked = settings.autoOpenCandidates;
 
   if (settings.enabled) {
     statusDot.classList.add("active");
@@ -58,5 +60,12 @@ toggleDesktop.addEventListener("change", () => {
   chrome.runtime.sendMessage({
     type: "UPDATE_SETTINGS",
     settings: { desktopNotifications: toggleDesktop.checked },
+  });
+});
+
+toggleAutoOpen.addEventListener("change", () => {
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { autoOpenCandidates: toggleAutoOpen.checked },
   });
 });

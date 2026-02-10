@@ -5,7 +5,8 @@
   "description": "Detects red notification badges in LinkedIn Recruiter and alerts you.",
   "permissions": [
     "notifications",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",

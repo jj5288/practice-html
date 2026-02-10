@@ -37,6 +37,8 @@
 
   let lastNotificationCount = 0;
   let isEnabled = true;
+  // Track candidate URLs we've already opened to avoid duplicates
+  let openedCandidateUrls = new Set();
 
   /**
    * Finds notification badge elements on the page and extracts the count.
@@ -128,6 +130,77 @@
   }
 
   /**
+   * Extracts "View Candidate" profile URLs from the notification dropdown.
+   * Looks for links with text like "View Candidate" and returns their hrefs.
+   */
+  function extractCandidateLinks() {
+    const urls = [];
+
+    // Strategy 1: Find links containing "View Candidate" text
+    const allLinks = document.querySelectorAll("a");
+    for (const link of allLinks) {
+      const text = (link.textContent || "").trim();
+      if (
+        text.toLowerCase().includes("view candidate") &&
+        link.href &&
+        !openedCandidateUrls.has(link.href)
+      ) {
+        urls.push(link.href);
+      }
+    }
+
+    // Strategy 2: Look inside notification list items for profile links
+    const notifSelectors = [
+      '[class*="notification"] a[href*="/profile/"]',
+      '[class*="notification"] a[href*="/recruiter/"]',
+      '[class*="notification"] a[href*="/talent/"]',
+      '.notification-list a[href]',
+      '[data-test-notification] a[href]',
+    ];
+    for (const selector of notifSelectors) {
+      const links = document.querySelectorAll(selector);
+      for (const link of links) {
+        if (link.href && !openedCandidateUrls.has(link.href) && !urls.includes(link.href)) {
+          urls.push(link.href);
+        }
+      }
+    }
+
+    return urls;
+  }
+
+  /**
+   * Watches for the notification dropdown to appear in the DOM.
+   * When it opens, scrape candidate links and send them to background.
+   */
+  function setupNotificationDropdownObserver() {
+    const observer = new MutationObserver(() => {
+      // Check if a notification dropdown/panel just appeared
+      const dropdowns = document.querySelectorAll(
+        '[class*="notification-dropdown"], [class*="notification-list"], [class*="notifications-dropdown"], [class*="notification-panel"], [aria-label*="Notification"]'
+      );
+      for (const dropdown of dropdowns) {
+        if (dropdown.offsetParent !== null) {
+          // Dropdown is visible — extract links
+          const urls = extractCandidateLinks();
+          if (urls.length > 0) {
+            chrome.runtime.sendMessage({
+              type: "CANDIDATE_LINKS_FOUND",
+              candidateUrls: urls,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  /**
    * Main polling loop. Checks for notification badges and notifies
    * the background script when changes are detected.
    */
@@ -137,12 +210,17 @@
     const result = detectNotificationBadge();
 
     if (result.found && result.count !== lastNotificationCount) {
-      // New or changed notification count
+      const isNewNotification = result.count > lastNotificationCount;
       lastNotificationCount = result.count;
+
+      // Extract "View Candidate" links from the notification dropdown
+      const candidateUrls = extractCandidateLinks();
 
       chrome.runtime.sendMessage({
         type: "NOTIFICATION_DETECTED",
         count: result.count,
+        candidateUrls,
+        isNewNotification,
         url: window.location.href,
         timestamp: Date.now(),
       });
@@ -228,10 +306,17 @@
         url: window.location.href,
       });
     }
+    if (message.type === "TABS_OPENED") {
+      // Track which URLs we already opened so we don't re-open them
+      for (const url of message.urls) {
+        openedCandidateUrls.add(url);
+      }
+    }
   });
 
   // Start detection
   setupMutationObserver();
+  setupNotificationDropdownObserver();
   setInterval(poll, CONFIG.POLL_INTERVAL_MS);
   // Run immediately on load
   poll();
