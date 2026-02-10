@@ -9,7 +9,8 @@
   "use strict";
 
   const CONFIG = {
-    POLL_INTERVAL_MS: 3000,
+    POLL_MIN_MS: 2500,
+    POLL_MAX_MS: 5500,
     // Selectors targeting the notification badge elements in LinkedIn Recruiter.
     // LinkedIn uses several patterns — we cast a wide net.
     BADGE_SELECTORS: [
@@ -314,10 +315,22 @@
     }
   });
 
+  // Randomized delay helper — avoids fixed-interval fingerprinting
+  function randomDelay(minMs, maxMs) {
+    return Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+  }
+
+  function schedulePoll() {
+    setTimeout(() => {
+      poll();
+      schedulePoll();
+    }, randomDelay(CONFIG.POLL_MIN_MS, CONFIG.POLL_MAX_MS));
+  }
+
   // Start detection
   setupMutationObserver();
   setupNotificationDropdownObserver();
-  setInterval(poll, CONFIG.POLL_INTERVAL_MS);
+  schedulePoll();
   // Run immediately on load
   poll();
 

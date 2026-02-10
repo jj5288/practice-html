@@ -59,6 +59,7 @@ chrome.runtime.sendMessage({ type: "GET_ANALYTICS" }, (response) => {
   document.getElementById("statQualRate").textContent = `${a.qualificationRate}%`;
   document.getElementById("statAvgResponse").textContent =
     a.avgResponseMin > 0 ? String(a.avgResponseMin) : "--";
+  document.getElementById("statRecruiters").textContent = String(a.totalRecruiters || 0);
 
   // Intelligence — peak times
   document.getElementById("intelPeakHour").textContent = a.peakHour;
@@ -72,6 +73,9 @@ chrome.runtime.sendMessage({ type: "GET_ANALYTICS" }, (response) => {
 
   // Top locations
   renderRankedList("topLocations", a.topLocations);
+
+  // Practice areas
+  renderRankedList("practiceAreas", a.topPracticeAreas);
 
   // Rejection reasons
   renderRankedList("rejectionReasons", a.topRejectionReasons);

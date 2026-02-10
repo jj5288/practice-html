@@ -1,10 +1,11 @@
 /**
  * Background service worker for LinkedIn Recruiter Notification Detector.
  *
- * Receives messages from the content script and triggers
- * desktop notifications + badge updates. Also handles candidate
- * screening via the Kimi K2.5 LLM, pushes qualified candidates
- * to Google Sheets, and tracks recruiting analytics/intelligence.
+ * - Desktop notifications + badge updates
+ * - Candidate screening via Kimi K2.5 LLM (fit score, salary, practice area, etc.)
+ * - Legal recruiter detection + email alerts
+ * - Google Sheets integration
+ * - Recruiting analytics/intelligence
  */
 
 const DEFAULT_SETTINGS = {
@@ -25,32 +26,25 @@ let currentCount = 0;
 let settings = { ...DEFAULT_SETTINGS };
 let screeningQueue = [];
 let isScreening = false;
+// Track which tabs were auto-opened by the extension
+let autoOpenedTabIds = new Set();
 
 // ─── Analytics Data Structure ───────────────────────────────────────
-// Persisted in chrome.storage.local for durability across restarts.
 
 const DEFAULT_ANALYTICS = {
-  // Notification counters
   totalAllTime: 0,
-  // Array of timestamps (ms) for every notification event
   notificationTimestamps: [],
-  // Screening results
   totalScreened: 0,
   totalQualified: 0,
   totalRejected: 0,
-  // Rejection reasons tally: { "Job hopping": 3, "Not US-based": 1, ... }
+  totalRecruiters: 0,
   rejectionReasons: {},
-  // Qualified candidate data for intelligence
-  // Each entry: { timestamp, firstName, lastName, location, titles, responseTimeMs }
   qualifiedCandidates: [],
-  // Hour-of-day histogram (0-23) — when do notifications arrive?
   hourHistogram: new Array(24).fill(0),
-  // Day-of-week histogram (0=Sun, 6=Sat)
   dayHistogram: new Array(7).fill(0),
-  // Trending open-to-work titles: { "Legal Recruiter": 5, ... }
   titleFrequency: {},
-  // Candidate locations: { "New York, NY": 8, ... }
   locationFrequency: {},
+  practiceAreaFrequency: {},
 };
 
 let analytics = { ...DEFAULT_ANALYTICS };
@@ -65,19 +59,16 @@ chrome.storage.sync.get("settings", (result) => {
 chrome.storage.local.get("analytics", (result) => {
   if (result.analytics) {
     analytics = { ...DEFAULT_ANALYTICS, ...result.analytics };
-    // Ensure arrays exist (storage can lose prototypes)
-    if (!Array.isArray(analytics.notificationTimestamps)) {
-      analytics.notificationTimestamps = [];
-    }
-    if (!Array.isArray(analytics.qualifiedCandidates)) {
-      analytics.qualifiedCandidates = [];
-    }
+    if (!Array.isArray(analytics.notificationTimestamps)) analytics.notificationTimestamps = [];
+    if (!Array.isArray(analytics.qualifiedCandidates)) analytics.qualifiedCandidates = [];
     if (!Array.isArray(analytics.hourHistogram) || analytics.hourHistogram.length !== 24) {
       analytics.hourHistogram = new Array(24).fill(0);
     }
     if (!Array.isArray(analytics.dayHistogram) || analytics.dayHistogram.length !== 7) {
       analytics.dayHistogram = new Array(7).fill(0);
     }
+    if (!analytics.practiceAreaFrequency) analytics.practiceAreaFrequency = {};
+    if (!analytics.totalRecruiters) analytics.totalRecruiters = 0;
   }
 });
 
@@ -91,40 +82,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "NOTIFICATION_DETECTED") {
     handleNotificationDetected(message, sender);
   }
-
   if (message.type === "NOTIFICATIONS_CLEARED") {
     handleNotificationsCleared();
   }
-
   if (message.type === "CANDIDATE_LINKS_FOUND") {
     openCandidateTabs(message.candidateUrls, sender);
   }
-
   if (message.type === "PROFILE_SCRAPED") {
-    handleProfileScraped(message);
+    handleProfileScraped(message, sender);
   }
-
   if (message.type === "GET_SETTINGS") {
     sendResponse({ settings, currentCount });
     return true;
   }
-
   if (message.type === "GET_ANALYTICS") {
     sendResponse({ analytics: computeAnalyticsSummary() });
     return true;
   }
-
   if (message.type === "RESET_ANALYTICS") {
-    analytics = { ...DEFAULT_ANALYTICS, hourHistogram: new Array(24).fill(0), dayHistogram: new Array(7).fill(0) };
+    analytics = {
+      ...DEFAULT_ANALYTICS,
+      hourHistogram: new Array(24).fill(0),
+      dayHistogram: new Array(7).fill(0),
+    };
     saveAnalytics();
     sendResponse({ ok: true });
     return true;
   }
-
   if (message.type === "UPDATE_SETTINGS") {
     settings = { ...settings, ...message.settings };
     chrome.storage.sync.set({ settings });
-
     if ("enabled" in message.settings) {
       broadcastToContentScripts({
         type: "SET_ENABLED",
@@ -138,20 +125,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function computeAnalyticsSummary() {
   const now = Date.now();
-  const oneDay = 86400000;
-  const oneWeek = 7 * oneDay;
-  const oneMonth = 30 * oneDay;
-  const oneYear = 365 * oneDay;
+  const oneWeek = 7 * 86400000;
+  const oneMonth = 30 * 86400000;
+  const oneYear = 365 * 86400000;
 
   const timestamps = analytics.notificationTimestamps;
-
   const thisWeek = timestamps.filter((t) => now - t < oneWeek).length;
   const thisMonth = timestamps.filter((t) => now - t < oneMonth).length;
   const thisYear = timestamps.filter((t) => now - t < oneYear).length;
 
-  // Find peak hour (most notifications)
-  let peakHour = 0;
-  let peakHourCount = 0;
+  let peakHour = 0, peakHourCount = 0;
   for (let h = 0; h < 24; h++) {
     if (analytics.hourHistogram[h] > peakHourCount) {
       peakHourCount = analytics.hourHistogram[h];
@@ -159,10 +142,8 @@ function computeAnalyticsSummary() {
     }
   }
 
-  // Find peak day
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  let peakDay = 0;
-  let peakDayCount = 0;
+  let peakDay = 0, peakDayCount = 0;
   for (let d = 0; d < 7; d++) {
     if (analytics.dayHistogram[d] > peakDayCount) {
       peakDayCount = analytics.dayHistogram[d];
@@ -170,59 +151,36 @@ function computeAnalyticsSummary() {
     }
   }
 
-  // Top 5 trending titles
-  const sortedTitles = Object.entries(analytics.titleFrequency)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  const sortedTitles = Object.entries(analytics.titleFrequency).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sortedLocations = Object.entries(analytics.locationFrequency).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sortedRejections = Object.entries(analytics.rejectionReasons).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sortedPracticeAreas = Object.entries(analytics.practiceAreaFrequency || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  // Top 5 locations
-  const sortedLocations = Object.entries(analytics.locationFrequency)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  const qualRate = analytics.totalScreened > 0
+    ? Math.round((analytics.totalQualified / analytics.totalScreened) * 100)
+    : 0;
 
-  // Top rejection reasons
-  const sortedRejections = Object.entries(analytics.rejectionReasons)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-
-  // Qualification rate
-  const qualRate =
-    analytics.totalScreened > 0
-      ? Math.round((analytics.totalQualified / analytics.totalScreened) * 100)
-      : 0;
-
-  // Average response time (time from notification to profile screened)
   const responseTimes = analytics.qualifiedCandidates
-    .map((c) => c.responseTimeMs)
-    .filter((t) => t > 0);
-  const avgResponseMs =
-    responseTimes.length > 0
-      ? responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length
-      : 0;
-  const avgResponseMin = Math.round(avgResponseMs / 60000);
+    .map((c) => c.responseTimeMs).filter((t) => t > 0);
+  const avgResponseMin = responseTimes.length > 0
+    ? Math.round((responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) / 60000)
+    : 0;
 
   return {
-    // Counters
     totalAllTime: analytics.totalAllTime,
-    thisWeek,
-    thisMonth,
-    thisYear,
-
-    // Screening
+    thisWeek, thisMonth, thisYear,
     totalScreened: analytics.totalScreened,
     totalQualified: analytics.totalQualified,
     totalRejected: analytics.totalRejected,
+    totalRecruiters: analytics.totalRecruiters || 0,
     qualificationRate: qualRate,
-
-    // Intelligence
-    peakHour: formatHour(peakHour),
-    peakHourRaw: peakHour,
-    peakDay: dayNames[peakDay],
-    peakDayRaw: peakDay,
+    peakHour: formatHour(peakHour), peakHourRaw: peakHour,
+    peakDay: dayNames[peakDay], peakDayRaw: peakDay,
     avgResponseMin,
     trendingTitles: sortedTitles,
     topLocations: sortedLocations,
     topRejectionReasons: sortedRejections,
+    topPracticeAreas: sortedPracticeAreas,
     hourHistogram: analytics.hourHistogram,
     dayHistogram: analytics.dayHistogram,
   };
@@ -244,12 +202,10 @@ function handleNotificationDetected(message, sender) {
   chrome.action.setBadgeText({ text: String(count) });
   chrome.action.setBadgeBackgroundColor({ color: "#e94560" });
 
-  // Track analytics for new notifications
   if (isNewNotification) {
     const now = new Date();
     const newCount = count - (analytics._lastCount || 0);
     const added = Math.max(newCount, 1);
-
     analytics.totalAllTime += added;
     for (let i = 0; i < added; i++) {
       analytics.notificationTimestamps.push(now.getTime());
@@ -258,12 +214,8 @@ function handleNotificationDetected(message, sender) {
     analytics.dayHistogram[now.getDay()] += added;
     analytics._lastCount = count;
 
-    // Keep timestamps array from growing unbounded (keep last 2 years)
     const twoYearsAgo = now.getTime() - 730 * 86400000;
-    analytics.notificationTimestamps = analytics.notificationTimestamps.filter(
-      (t) => t > twoYearsAgo
-    );
-
+    analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
     saveAnalytics();
   }
 
@@ -288,12 +240,20 @@ function handleNotificationsCleared() {
   chrome.action.setBadgeText({ text: "" });
 }
 
+/**
+ * Opens candidate profile URLs in new background tabs.
+ * Appends #lnr-auto to the URL so the profile scraper knows
+ * this tab was auto-opened (not manual browsing).
+ */
 function openCandidateTabs(urls, sender) {
   if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
 
   const opened = [];
   for (const url of urls) {
-    chrome.tabs.create({ url, active: false }, () => {
+    // Tag URL so profile-scraper.js knows to scrape it
+    const taggedUrl = url.includes("#") ? `${url}&lnr-auto` : `${url}#lnr-auto`;
+    chrome.tabs.create({ url: taggedUrl, active: false }, (tab) => {
+      if (tab) autoOpenedTabIds.add(tab.id);
       opened.push(url);
       if (opened.length === urls.length && sender && sender.tab) {
         chrome.tabs.sendMessage(sender.tab.id, {
@@ -307,12 +267,7 @@ function openCandidateTabs(urls, sender) {
 
 function broadcastToContentScripts(message) {
   chrome.tabs.query(
-    {
-      url: [
-        "https://www.linkedin.com/recruiter/*",
-        "https://www.linkedin.com/talent/*",
-      ],
-    },
+    { url: ["https://www.linkedin.com/recruiter/*", "https://www.linkedin.com/talent/*"] },
     (tabs) => {
       for (const tab of tabs) {
         chrome.tabs.sendMessage(tab.id, message);
@@ -321,12 +276,16 @@ function broadcastToContentScripts(message) {
   );
 }
 
+// Clean up auto-opened tab tracking when tabs close
+chrome.tabs.onRemoved.addListener((tabId) => {
+  autoOpenedTabIds.delete(tabId);
+});
+
 // ─── Candidate Screening Pipeline ───────────────────────────────────
 
-function handleProfileScraped(message) {
+function handleProfileScraped(message, sender) {
   if (!settings.autoScreenCandidates) return;
 
-  // Attach timestamp so we can compute response time later
   message.profile._scrapedAt = Date.now();
   screeningQueue.push(message.profile);
   processScreeningQueue();
@@ -344,13 +303,31 @@ async function processScreeningQueue() {
 
       analytics.totalScreened++;
 
+      // ─── Legal Recruiter Detection ────────────────────────────
+      if (result.data.isRecruiter) {
+        analytics.totalRecruiters = (analytics.totalRecruiters || 0) + 1;
+
+        // Send email alert for recruiters — these are rare and critical
+        await sendRecruiterEmailAlert(result.data);
+
+        if (settings.desktopNotifications) {
+          chrome.notifications.create(`lnr-recruiter-${Date.now()}`, {
+            type: "basic",
+            iconUrl: "icons/icon128.png",
+            title: "LEGAL RECRUITER DETECTED",
+            message: `${result.data.firstName} ${result.data.lastName} — ${result.data.currentJob}. Email sent!`,
+            priority: 2,
+          });
+        }
+
+        saveAnalytics();
+        continue; // Don't push recruiters to the candidate sheet
+      }
+
       if (result.qualified) {
         analytics.totalQualified++;
 
-        // Track intelligence data
-        const responseTimeMs = profile._scrapedAt
-          ? Date.now() - profile._scrapedAt
-          : 0;
+        const responseTimeMs = profile._scrapedAt ? Date.now() - profile._scrapedAt : 0;
 
         analytics.qualifiedCandidates.push({
           timestamp: Date.now(),
@@ -363,41 +340,40 @@ async function processScreeningQueue() {
 
         // Track title frequency
         if (result.data.openToWorkTitles && result.data.openToWorkTitles !== "Not specified") {
-          const titles = result.data.openToWorkTitles.split(",").map((t) => t.trim());
-          for (const title of titles) {
-            if (title) {
-              analytics.titleFrequency[title] = (analytics.titleFrequency[title] || 0) + 1;
-            }
+          for (const title of result.data.openToWorkTitles.split(",").map((t) => t.trim())) {
+            if (title) analytics.titleFrequency[title] = (analytics.titleFrequency[title] || 0) + 1;
           }
         }
 
         // Track location frequency
         if (result.data.currentLocation) {
-          const loc = result.data.currentLocation;
-          analytics.locationFrequency[loc] = (analytics.locationFrequency[loc] || 0) + 1;
+          analytics.locationFrequency[result.data.currentLocation] =
+            (analytics.locationFrequency[result.data.currentLocation] || 0) + 1;
+        }
+
+        // Track practice area frequency
+        if (result.data.practiceArea && result.data.practiceArea !== "Not specified") {
+          for (const area of result.data.practiceArea.split(",").map((a) => a.trim())) {
+            if (area) analytics.practiceAreaFrequency[area] = (analytics.practiceAreaFrequency[area] || 0) + 1;
+          }
         }
 
         await pushToGoogleSheet(result.data);
 
         if (settings.desktopNotifications) {
+          const moveTag = result.data.physicalMove ? " [RELOCATING]" : "";
           chrome.notifications.create(`lnr-qualified-${Date.now()}`, {
             type: "basic",
             iconUrl: "icons/icon128.png",
-            title: "Qualified Candidate Found",
+            title: `Qualified (${result.data.fitScore}/10)${moveTag}`,
             message: `${result.data.firstName} ${result.data.lastName} — ${result.data.currentJob}`,
             priority: 2,
           });
         }
       } else {
         analytics.totalRejected++;
-
-        // Track rejection reason
-        const reason = result.reason || "Unknown";
-        // Categorize the reason into a short label
-        const category = categorizeRejection(reason);
-        analytics.rejectionReasons[category] =
-          (analytics.rejectionReasons[category] || 0) + 1;
-
+        const category = categorizeRejection(result.reason);
+        analytics.rejectionReasons[category] = (analytics.rejectionReasons[category] || 0) + 1;
         console.log(`[LNR Detector] Candidate rejected: ${result.reason}`);
       }
 
@@ -410,32 +386,20 @@ async function processScreeningQueue() {
   isScreening = false;
 }
 
-/**
- * Categorizes a free-text rejection reason into a short label.
- */
 function categorizeRejection(reason) {
-  const lower = reason.toLowerCase();
-  if (lower.includes("job hop") || lower.includes("jobs in") || lower.includes("positions in")) {
-    return "Job hopping";
-  }
+  const lower = (reason || "").toLowerCase();
+  if (lower.includes("job hop") || lower.includes("jobs in") || lower.includes("positions in")) return "Job hopping";
   if (lower.includes("in-house") || lower.includes("inhouse") || lower.includes("internal")) {
-    if (lower.includes("looking") || lower.includes("seeking") || lower.includes("open to")) {
-      return "Seeking in-house";
-    }
+    if (lower.includes("looking") || lower.includes("seeking") || lower.includes("open to")) return "Seeking in-house";
     return "In-house candidate";
   }
-  if (lower.includes("graduat") || lower.includes("12 month") || lower.includes("experience")) {
-    return "Too recent graduate";
-  }
-  if (lower.includes("us") || lower.includes("united states") || lower.includes("location") || lower.includes("based")) {
-    return "Not US-based";
-  }
+  if (lower.includes("graduat") || lower.includes("12 month") || lower.includes("experience")) return "Too recent graduate";
+  if (lower.includes("us") || lower.includes("united states") || lower.includes("location") || lower.includes("based")) return "Not US-based";
   return "Other";
 }
 
-/**
- * Sends the candidate profile to Kimi K2.5 for screening.
- */
+// ─── LLM Screening ─────────────────────────────────────────────────
+
 async function screenCandidate(profile) {
   const prompt = buildScreeningPrompt(profile);
 
@@ -449,7 +413,7 @@ async function screenCandidate(profile) {
     body: JSON.stringify({
       model: "moonshotai/kimi-k2.5",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 2048,
+      max_tokens: 4096,
       temperature: 0.1,
       top_p: 1.0,
       stream: false,
@@ -462,19 +426,27 @@ async function screenCandidate(profile) {
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || "";
-
   return parseScreeningResponse(content, profile);
 }
 
 function buildScreeningPrompt(profile) {
-  return `You are a recruiting assistant. Analyze this LinkedIn candidate profile and determine if they are a GOOD FIT based on these strict rules:
+  return `You are a legal recruiting assistant for Voll Recruiting. Analyze this LinkedIn candidate profile thoroughly.
 
-RULES:
-1. NO JOB HOPPING: Must NOT have 3 or more different jobs within any 5-year period.
-2. NO IN-HOUSE CANDIDATES: Candidate must NOT currently work in-house (i.e., they should work at a staffing agency, law firm, consulting firm, or similar — NOT as an internal/in-house employee at a non-recruiting/non-staffing company).
-3. NO CANDIDATES LOOKING FOR IN-HOUSE ROLES: If their "open to work" preferences mention in-house roles, reject them.
+FIRST: Determine if this person IS a legal recruiter (works in legal staffing, legal recruiting, legal talent acquisition). Recruiters are NOT candidates — they are potential partners/competitors. Flag them separately.
+
+If they are NOT a recruiter, evaluate them as a candidate using these STRICT rules:
+1. NO JOB HOPPING: Must NOT have 3 or more different employers within any 5-year period.
+2. NO IN-HOUSE CANDIDATES: Must NOT currently work in-house at a corporation. They should work at a law firm, staffing agency, consulting firm, or similar.
+3. NO CANDIDATES LOOKING FOR IN-HOUSE ROLES: If "open to work" preferences mention in-house roles, reject.
 4. MINIMUM EXPERIENCE: Must be at least 12 months since their most recent graduation date.
-5. US-BASED: Candidate must be located in the United States.
+5. US-BASED: Must be located in the United States.
+
+ADDITIONAL ANALYSIS (provide for ALL candidates, even rejected):
+- FIT SCORE: Rate 1-10 overall fit quality (10 = perfect candidate)
+- SALARY RANGE: Estimate annual salary range in USD based on title + location + experience level
+- PRACTICE AREA: Extract their legal specialty/practice area(s) (e.g., IP, Corporate, Litigation, Real Estate, Family Law, Immigration, Employment, Tax, Bankruptcy, etc.). If not in legal, say "Non-legal"
+- READY TO MOVE: Assess likelihood they'll actually move (High/Medium/Low) based on signals like recent profile updates, "open to work" badge, multiple job titles listed, etc.
+- PHYSICAL MOVE: Compare their current location to their preferred on-site location(s). If these are DIFFERENT cities/states, they are looking to physically relocate — flag as true.
 
 PROFILE DATA:
 - Name: ${profile.name}
@@ -489,14 +461,22 @@ ${profile.rawText}
 
 RESPOND WITH EXACTLY THIS JSON FORMAT AND NOTHING ELSE:
 {
+  "isRecruiter": true or false,
+  "recruiterNote": "If recruiter: what firm they work at and their specialty. If not a recruiter: empty string",
   "qualified": true or false,
-  "reason": "Brief explanation of why they passed or failed",
+  "reason": "Brief explanation of why they passed or failed the 5 rules",
+  "fitScore": 1-10,
   "firstName": "extracted first name",
   "lastName": "extracted last name",
   "currentJob": "their current job title and company",
   "currentLocation": "their current city/state",
-  "openToWorkTitles": "comma-separated list of job titles they are open to, or 'Not specified'",
-  "onSiteLocationPreferred": "their preferred on-site work location(s), or 'Not specified'"
+  "openToWorkTitles": "comma-separated job titles they are open to, or 'Not specified'",
+  "onSiteLocationPreferred": "preferred on-site work location(s), or 'Not specified'",
+  "practiceArea": "comma-separated legal practice areas, or 'Non-legal' or 'Not specified'",
+  "salaryEstimate": "e.g. '$120,000 - $160,000' or 'Not enough data'",
+  "readyToMove": "High, Medium, or Low",
+  "physicalMove": true or false,
+  "physicalMoveNote": "e.g. 'Currently in Chicago, looking for NYC roles' or empty string"
 }`;
 }
 
@@ -504,9 +484,7 @@ function parseScreeningResponse(content, profile) {
   try {
     let jsonStr = content;
     const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[0];
-    }
+    if (jsonMatch) jsonStr = jsonMatch[0];
 
     const parsed = JSON.parse(jsonStr);
 
@@ -514,14 +492,21 @@ function parseScreeningResponse(content, profile) {
       qualified: parsed.qualified === true,
       reason: parsed.reason || "No reason provided",
       data: {
+        isRecruiter: parsed.isRecruiter === true,
+        recruiterNote: parsed.recruiterNote || "",
+        fitScore: parsed.fitScore || 0,
         firstName: parsed.firstName || "",
         lastName: parsed.lastName || "",
         currentJob: parsed.currentJob || "",
         currentLocation: parsed.currentLocation || "",
         profileUrl: profile.profileUrl || "",
         openToWorkTitles: parsed.openToWorkTitles || "Not specified",
-        onSiteLocationPreferred:
-          parsed.onSiteLocationPreferred || "Not specified",
+        onSiteLocationPreferred: parsed.onSiteLocationPreferred || "Not specified",
+        practiceArea: parsed.practiceArea || "Not specified",
+        salaryEstimate: parsed.salaryEstimate || "Not enough data",
+        readyToMove: parsed.readyToMove || "Unknown",
+        physicalMove: parsed.physicalMove === true,
+        physicalMoveNote: parsed.physicalMoveNote || "",
       },
     };
   } catch (err) {
@@ -534,14 +519,44 @@ function parseScreeningResponse(content, profile) {
   }
 }
 
+// ─── Legal Recruiter Email Alert ────────────────────────────────────
+// Uses the same Google Apps Script webhook — it handles email sending
+// server-side so we don't need extra permissions.
+
+async function sendRecruiterEmailAlert(data) {
+  const webhookUrl = settings.sheetsWebhookUrl;
+  if (!webhookUrl) {
+    console.warn("[LNR Detector] No webhook configured — cannot send recruiter email.");
+    return;
+  }
+
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "recruiter_alert",
+        firstName: data.firstName,
+        lastName: data.lastName,
+        currentJob: data.currentJob,
+        currentLocation: data.currentLocation,
+        profileUrl: data.profileUrl,
+        recruiterNote: data.recruiterNote,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    console.log("[LNR Detector] Recruiter email alert sent.");
+  } catch (err) {
+    console.error("[LNR Detector] Failed to send recruiter email:", err);
+  }
+}
+
 // ─── Google Sheets Integration ──────────────────────────────────────
 
 async function pushToGoogleSheet(candidateData) {
   const webhookUrl = settings.sheetsWebhookUrl;
   if (!webhookUrl) {
-    console.warn(
-      "[LNR Detector] No Google Sheets webhook URL configured. Skipping push."
-    );
+    console.warn("[LNR Detector] No Google Sheets webhook URL configured.");
     return;
   }
 
@@ -549,6 +564,7 @@ async function pushToGoogleSheet(candidateData) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      action: "add_candidate",
       firstName: candidateData.firstName,
       lastName: candidateData.lastName,
       currentJob: candidateData.currentJob,
@@ -556,6 +572,12 @@ async function pushToGoogleSheet(candidateData) {
       profileUrl: candidateData.profileUrl,
       openToWorkTitles: candidateData.openToWorkTitles,
       onSiteLocationPreferred: candidateData.onSiteLocationPreferred,
+      fitScore: candidateData.fitScore,
+      practiceArea: candidateData.practiceArea,
+      salaryEstimate: candidateData.salaryEstimate,
+      readyToMove: candidateData.readyToMove,
+      physicalMove: candidateData.physicalMove ? "YES - RELOCATING" : "No",
+      physicalMoveNote: candidateData.physicalMoveNote,
       timestamp: new Date().toISOString(),
     }),
   });

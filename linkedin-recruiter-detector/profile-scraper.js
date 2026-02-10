@@ -1,6 +1,9 @@
 /**
  * Profile Scraper - runs on LinkedIn Recruiter profile pages.
  *
+ * SAFETY: Only scrapes profiles that were auto-opened by the extension
+ * (tagged via URL hash). Respects robots meta tags. Uses randomized delays.
+ *
  * Extracts candidate data from the profile and sends it to the
  * background script for screening via the Kimi K2.5 LLM.
  */
@@ -8,13 +11,48 @@
 (function () {
   "use strict";
 
+  // ─── Safety Gate: Only scrape auto-opened tabs ────────────────────
+  // The background script appends #lnr-auto to URLs it opens.
+  // If this hash isn't present, the user navigated here manually — don't scrape.
+  if (!window.location.hash.includes("lnr-auto")) {
+    console.log("[LNR Detector] Profile not auto-opened — skipping scrape.");
+    return;
+  }
+
+  // Clean the hash from the URL so it doesn't look suspicious
+  if (history.replaceState) {
+    const cleanUrl = window.location.href.replace(/#lnr-auto/, "").replace(/#$/, "");
+    history.replaceState(null, "", cleanUrl);
+  }
+
+  // ─── Safety Gate: Respect robots meta tags ────────────────────────
+  function isScrapingAllowed() {
+    const robotsMeta = document.querySelector('meta[name="robots"]');
+    if (robotsMeta) {
+      const content = (robotsMeta.getAttribute("content") || "").toLowerCase();
+      if (content.includes("noindex") || content.includes("nofollow")) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // ─── Randomized delay helper ──────────────────────────────────────
+  function randomDelay(minMs, maxMs) {
+    return Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+  }
+
   // Wait for the profile to fully load before scraping
   let scrapeAttempts = 0;
   const MAX_ATTEMPTS = 15;
-  const RETRY_MS = 2000;
 
   function scrapeProfile() {
     scrapeAttempts++;
+
+    if (!isScrapingAllowed()) {
+      console.log("[LNR Detector] Page robots meta disallows scraping — skipping.");
+      return;
+    }
 
     // Gather all visible text from the profile page
     const profileData = extractProfileData();
@@ -22,7 +60,7 @@
     if (!profileData.rawText || profileData.rawText.length < 100) {
       // Page likely hasn't loaded yet
       if (scrapeAttempts < MAX_ATTEMPTS) {
-        setTimeout(scrapeProfile, RETRY_MS);
+        setTimeout(scrapeProfile, randomDelay(1500, 3500));
         return;
       }
     }
@@ -149,7 +187,6 @@
     }
 
     // --- Full page text as fallback for LLM analysis ---
-    // Get the main profile content area, or fall back to body
     const mainContent =
       document.querySelector('[class*="profile"]') ||
       document.querySelector("main") ||
@@ -159,8 +196,8 @@
     return data;
   }
 
-  // Start scraping after a short delay to let the page render
-  setTimeout(scrapeProfile, 2000);
+  // Start scraping after a randomized delay (looks more human)
+  setTimeout(scrapeProfile, randomDelay(2000, 4500));
 
-  console.log("[LNR Detector] Profile scraper loaded.");
+  console.log("[LNR Detector] Profile scraper loaded (auto-opened tab).");
 })();
