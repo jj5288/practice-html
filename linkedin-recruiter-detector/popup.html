@@ -3,81 +3,141 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      width: 320px;
+      width: 360px;
+      max-height: 560px;
+      overflow-y: auto;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #1a1a2e;
       color: #eee;
       padding: 16px;
     }
 
-    h1 {
-      font-size: 15px;
-      margin-bottom: 4px;
-      color: #e94560;
-    }
+    h1 { font-size: 15px; margin-bottom: 4px; color: #e94560; }
+    .subtitle { font-size: 11px; color: #888; margin-bottom: 12px; }
 
-    .subtitle {
-      font-size: 11px;
+    /* ─── Tabs ─── */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      margin-bottom: 14px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #16213e;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 0;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      background: #16213e;
       color: #888;
-      margin-bottom: 16px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
     }
+    .tab-btn.active {
+      background: #e94560;
+      color: #fff;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
 
-    .status-bar {
+    /* ─── Stats grid ─── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .stat-card {
       background: #16213e;
       border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 14px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      padding: 10px;
+      text-align: center;
     }
-
-    .status-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    .status-dot.active {
-      background: #4ecca3;
-      box-shadow: 0 0 6px #4ecca3;
-    }
-
-    .status-dot.inactive {
-      background: #666;
-    }
-
-    .status-text {
-      font-size: 13px;
-    }
-
-    .count-display {
-      font-size: 24px;
+    .stat-card.wide { grid-column: span 2; }
+    .stat-value {
+      font-size: 22px;
       font-weight: 700;
       color: #e94560;
-      text-align: center;
-      padding: 10px 0;
     }
-
-    .count-display.zero {
-      color: #4ecca3;
-    }
-
-    .count-label {
-      text-align: center;
-      font-size: 11px;
+    .stat-value.green { color: #4ecca3; }
+    .stat-label {
+      font-size: 10px;
       color: #888;
-      margin-bottom: 16px;
+      margin-top: 2px;
     }
 
+    /* ─── Intelligence section ─── */
+    .intel-section {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .intel-title {
+      font-size: 11px;
+      color: #e94560;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .intel-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      font-size: 12px;
+    }
+    .intel-row .label { color: #aaa; }
+    .intel-row .value { color: #eee; font-weight: 600; }
+
+    .bar-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 40px;
+      margin-top: 6px;
+    }
+    .bar {
+      flex: 1;
+      background: #e94560;
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+      position: relative;
+    }
+    .bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 8px;
+      color: #555;
+      margin-top: 2px;
+    }
+
+    .ranked-list { list-style: none; }
+    .ranked-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 0;
+      font-size: 12px;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .ranked-list li:last-child { border: none; }
+    .rank-name { color: #ccc; }
+    .rank-count {
+      background: #1a1a2e;
+      color: #e94560;
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* ─── Settings ─── */
     .section-label {
       font-size: 11px;
       color: #e94560;
@@ -88,120 +148,62 @@
       padding-top: 8px;
       border-top: 1px solid #16213e;
     }
-
     .setting-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 8px 0;
     }
+    .setting-label { font-size: 13px; }
 
-    .setting-label {
-      font-size: 13px;
-    }
-
-    /* Toggle switch */
-    .toggle {
-      position: relative;
-      width: 40px;
-      height: 22px;
-    }
-
-    .toggle input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-
+    .toggle { position: relative; width: 40px; height: 22px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
     .toggle-slider {
-      position: absolute;
-      inset: 0;
-      background: #333;
-      border-radius: 22px;
-      cursor: pointer;
-      transition: background 0.2s;
+      position: absolute; inset: 0;
+      background: #333; border-radius: 22px;
+      cursor: pointer; transition: background 0.2s;
     }
-
     .toggle-slider::before {
-      content: "";
-      position: absolute;
-      width: 16px;
-      height: 16px;
-      left: 3px;
-      bottom: 3px;
-      background: #eee;
-      border-radius: 50%;
+      content: ""; position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; bottom: 3px;
+      background: #eee; border-radius: 50%;
       transition: transform 0.2s;
     }
+    .toggle input:checked + .toggle-slider { background: #4ecca3; }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
 
-    .toggle input:checked + .toggle-slider {
-      background: #4ecca3;
-    }
-
-    .toggle input:checked + .toggle-slider::before {
-      transform: translateX(18px);
-    }
-
-    /* URL input */
-    .url-input-group {
-      margin-top: 6px;
-      margin-bottom: 8px;
-    }
-
-    .url-input-group label {
-      font-size: 11px;
-      color: #888;
-      display: block;
-      margin-bottom: 4px;
-    }
-
+    .url-input-group { margin-top: 6px; margin-bottom: 8px; }
+    .url-input-group label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
     .url-input-group input {
-      width: 100%;
-      padding: 6px 8px;
-      border: 1px solid #333;
-      border-radius: 6px;
-      background: #16213e;
-      color: #eee;
-      font-size: 12px;
-      outline: none;
+      width: 100%; padding: 6px 8px;
+      border: 1px solid #333; border-radius: 6px;
+      background: #16213e; color: #eee; font-size: 12px; outline: none;
     }
+    .url-input-group input:focus { border-color: #4ecca3; }
+    .url-input-group input::placeholder { color: #555; }
 
-    .url-input-group input:focus {
-      border-color: #4ecca3;
-    }
-
-    .url-input-group input::placeholder {
-      color: #555;
-    }
-
+    .btn-row { display: flex; gap: 8px; align-items: center; }
     .save-btn {
-      margin-top: 4px;
-      padding: 5px 12px;
-      background: #4ecca3;
-      color: #1a1a2e;
-      border: none;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
+      padding: 5px 12px; background: #4ecca3; color: #1a1a2e;
+      border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
     }
-
-    .save-btn:hover {
-      background: #3dbb94;
+    .save-btn:hover { background: #3dbb94; }
+    .reset-btn {
+      padding: 5px 12px; background: #333; color: #e94560;
+      border: 1px solid #e94560; border-radius: 6px; font-size: 11px; cursor: pointer;
     }
+    .reset-btn:hover { background: #e94560; color: #fff; }
+    .save-msg { font-size: 11px; color: #4ecca3; display: none; }
 
-    .save-msg {
-      font-size: 11px;
-      color: #4ecca3;
-      margin-left: 8px;
-      display: none;
+    .empty-state {
+      text-align: center; color: #555; font-size: 12px;
+      padding: 20px 0;
     }
 
     .footer {
-      margin-top: 14px;
-      text-align: center;
-      font-size: 10px;
-      color: #555;
+      margin-top: 14px; text-align: center;
+      font-size: 10px; color: #555;
     }
   </style>
 </head>
@@ -209,63 +211,160 @@
   <h1>LinkedIn Recruiter Detector</h1>
   <p class="subtitle">Notification monitoring + candidate screening</p>
 
-  <div class="status-bar">
-    <div class="status-dot" id="statusDot"></div>
-    <span class="status-text" id="statusText">Checking...</span>
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="intelligence">Intelligence</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
   </div>
 
-  <div class="count-display" id="countDisplay">--</div>
-  <div class="count-label">current notifications</div>
+  <!-- ═══════ DASHBOARD TAB ═══════ -->
+  <div class="tab-content active" id="tab-dashboard">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="statCurrent">--</div>
+        <div class="stat-label">Right Now</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statWeek">--</div>
+        <div class="stat-label">This Week</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statMonth">--</div>
+        <div class="stat-label">This Month</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statYear">--</div>
+        <div class="stat-label">This Year</div>
+      </div>
+      <div class="stat-card wide">
+        <div class="stat-value" id="statAllTime">--</div>
+        <div class="stat-label">All Time</div>
+      </div>
+    </div>
 
-  <!-- Toggles -->
-  <div class="section-label">Notifications</div>
-
-  <div class="setting-row">
-    <span class="setting-label">Enabled</span>
-    <label class="toggle">
-      <input type="checkbox" id="toggleEnabled" checked>
-      <span class="toggle-slider"></span>
-    </label>
+    <!-- Screening stats -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value green" id="statQualified">--</div>
+        <div class="stat-label">Qualified</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statRejected">--</div>
+        <div class="stat-label">Rejected</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value green" id="statQualRate">--%</div>
+        <div class="stat-label">Pass Rate</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value green" id="statAvgResponse">--</div>
+        <div class="stat-label">Avg Response (min)</div>
+      </div>
+    </div>
   </div>
 
-  <div class="setting-row">
-    <span class="setting-label">Desktop notifications</span>
-    <label class="toggle">
-      <input type="checkbox" id="toggleDesktop" checked>
-      <span class="toggle-slider"></span>
-    </label>
+  <!-- ═══════ INTELLIGENCE TAB ═══════ -->
+  <div class="tab-content" id="tab-intelligence">
+    <!-- Peak timing -->
+    <div class="intel-section">
+      <div class="intel-title">Best Time to Be Online</div>
+      <div class="intel-row">
+        <span class="label">Peak hour</span>
+        <span class="value" id="intelPeakHour">--</span>
+      </div>
+      <div class="intel-row">
+        <span class="label">Peak day</span>
+        <span class="value" id="intelPeakDay">--</span>
+      </div>
+    </div>
+
+    <!-- Hour histogram -->
+    <div class="intel-section">
+      <div class="intel-title">Notifications by Hour</div>
+      <div class="bar-chart" id="hourChart"></div>
+      <div class="bar-label">
+        <span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>11p</span>
+      </div>
+    </div>
+
+    <!-- Trending titles -->
+    <div class="intel-section">
+      <div class="intel-title">Trending Job Titles (Open to Work)</div>
+      <ul class="ranked-list" id="trendingTitles">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
+
+    <!-- Top locations -->
+    <div class="intel-section">
+      <div class="intel-title">Top Candidate Locations</div>
+      <ul class="ranked-list" id="topLocations">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
+
+    <!-- Top rejection reasons -->
+    <div class="intel-section">
+      <div class="intel-title">Top Rejection Reasons</div>
+      <ul class="ranked-list" id="rejectionReasons">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
   </div>
 
-  <div class="setting-row">
-    <span class="setting-label">Auto-open candidate profiles</span>
-    <label class="toggle">
-      <input type="checkbox" id="toggleAutoOpen" checked>
-      <span class="toggle-slider"></span>
-    </label>
+  <!-- ═══════ SETTINGS TAB ═══════ -->
+  <div class="tab-content" id="tab-settings">
+    <div class="section-label">Notifications</div>
+
+    <div class="setting-row">
+      <span class="setting-label">Enabled</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleEnabled" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">Desktop notifications</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleDesktop" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">Auto-open candidate profiles</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleAutoOpen" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="section-label">Screening</div>
+    <div class="setting-row">
+      <span class="setting-label">Auto-screen candidates (Kimi AI)</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleAutoScreen" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="section-label">Google Sheets</div>
+    <div class="url-input-group">
+      <label for="sheetsUrl">Apps Script Web App URL</label>
+      <input type="url" id="sheetsUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    </div>
+    <div class="btn-row">
+      <button class="save-btn" id="saveSheetUrl">Save</button>
+      <span class="save-msg" id="saveMsg">Saved!</span>
+    </div>
+
+    <div class="section-label">Data</div>
+    <div class="btn-row" style="padding: 8px 0;">
+      <button class="reset-btn" id="resetAnalytics">Reset All Analytics</button>
+    </div>
   </div>
 
-  <div class="section-label">Screening</div>
-
-  <div class="setting-row">
-    <span class="setting-label">Auto-screen candidates (Kimi AI)</span>
-    <label class="toggle">
-      <input type="checkbox" id="toggleAutoScreen" checked>
-      <span class="toggle-slider"></span>
-    </label>
-  </div>
-
-  <div class="section-label">Google Sheets</div>
-
-  <div class="url-input-group">
-    <label for="sheetsUrl">Apps Script Web App URL</label>
-    <input type="url" id="sheetsUrl" placeholder="https://script.google.com/macros/s/.../exec">
-  </div>
-  <div>
-    <button class="save-btn" id="saveSheetUrl">Save</button>
-    <span class="save-msg" id="saveMsg">Saved!</span>
-  </div>
-
-  <div class="footer">Screens candidates via Kimi K2.5 and pushes qualified ones to Google Sheets</div>
+  <div class="footer">v2.0 — Screens candidates via Kimi K2.5 AI</div>
 
   <script src="popup.js"></script>
 </body>
