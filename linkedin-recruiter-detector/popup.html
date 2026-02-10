@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 300px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 15px;
+      margin-bottom: 4px;
+      color: #e94560;
+    }
+
+    .subtitle {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .status-bar {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .status-dot.active {
+      background: #4ecca3;
+      box-shadow: 0 0 6px #4ecca3;
+    }
+
+    .status-dot.inactive {
+      background: #666;
+    }
+
+    .status-text {
+      font-size: 13px;
+    }
+
+    .count-display {
+      font-size: 24px;
+      font-weight: 700;
+      color: #e94560;
+      text-align: center;
+      padding: 10px 0;
+    }
+
+    .count-display.zero {
+      color: #4ecca3;
+    }
+
+    .count-label {
+      text-align: center;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-top: 1px solid #16213e;
+    }
+
+    .setting-label {
+      font-size: 13px;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: #333;
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      left: 3px;
+      bottom: 3px;
+      background: #eee;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      background: #4ecca3;
+    }
+
+    .toggle input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+    }
+
+    .footer {
+      margin-top: 14px;
+      text-align: center;
+      font-size: 10px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>LinkedIn Recruiter Detector</h1>
+  <p class="subtitle">Notification monitoring</p>
+
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">Checking...</span>
+  </div>
+
+  <div class="count-display" id="countDisplay">--</div>
+  <div class="count-label">current notifications</div>
+
+  <div class="setting-row">
+    <span class="setting-label">Enabled</span>
+    <label class="toggle">
+      <input type="checkbox" id="toggleEnabled" checked>
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+
+  <div class="setting-row">
+    <span class="setting-label">Desktop notifications</span>
+    <label class="toggle">
+      <input type="checkbox" id="toggleDesktop" checked>
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+
+  <div class="footer">Monitors LinkedIn Recruiter tabs for red notification badges</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
