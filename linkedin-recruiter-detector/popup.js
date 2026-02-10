@@ -8,6 +8,10 @@ const countDisplay = document.getElementById("countDisplay");
 const toggleEnabled = document.getElementById("toggleEnabled");
 const toggleDesktop = document.getElementById("toggleDesktop");
 const toggleAutoOpen = document.getElementById("toggleAutoOpen");
+const toggleAutoScreen = document.getElementById("toggleAutoScreen");
+const sheetsUrlInput = document.getElementById("sheetsUrl");
+const saveSheetUrlBtn = document.getElementById("saveSheetUrl");
+const saveMsg = document.getElementById("saveMsg");
 
 // Load current state from background
 chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
@@ -24,6 +28,8 @@ chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
   toggleEnabled.checked = settings.enabled;
   toggleDesktop.checked = settings.desktopNotifications;
   toggleAutoOpen.checked = settings.autoOpenCandidates;
+  toggleAutoScreen.checked = settings.autoScreenCandidates;
+  sheetsUrlInput.value = settings.sheetsWebhookUrl || "";
 
   if (settings.enabled) {
     statusDot.classList.add("active");
@@ -68,4 +74,25 @@ toggleAutoOpen.addEventListener("change", () => {
     type: "UPDATE_SETTINGS",
     settings: { autoOpenCandidates: toggleAutoOpen.checked },
   });
+});
+
+toggleAutoScreen.addEventListener("change", () => {
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { autoScreenCandidates: toggleAutoScreen.checked },
+  });
+});
+
+// Save Google Sheets webhook URL
+saveSheetUrlBtn.addEventListener("click", () => {
+  const url = sheetsUrlInput.value.trim();
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { sheetsWebhookUrl: url },
+  });
+
+  saveMsg.style.display = "inline";
+  setTimeout(() => {
+    saveMsg.style.display = "none";
+  }, 2000);
 });

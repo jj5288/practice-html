@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Recruiter Notification Detector",
-  "version": "1.0.0",
-  "description": "Detects red notification badges in LinkedIn Recruiter and alerts you.",
+  "version": "2.0.0",
+  "description": "Detects LinkedIn Recruiter notifications, screens candidates via AI, and pushes qualified ones to Google Sheets.",
   "permissions": [
     "notifications",
     "storage",
@@ -10,7 +10,10 @@
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
-    "https://linkedin.com/*"
+    "https://linkedin.com/*",
+    "https://integrate.api.nvidia.com/*",
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,6 +26,15 @@
       ],
       "js": ["content.js"],
       "css": ["content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/talent/profile/*",
+        "https://www.linkedin.com/recruiter/profile/*",
+        "https://www.linkedin.com/in/*"
+      ],
+      "js": ["profile-scraper.js"],
       "run_at": "document_idle"
     }
   ],
