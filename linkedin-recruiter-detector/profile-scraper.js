@@ -91,6 +91,7 @@
       education: [],
       openToWork: "",
       profileUrl: window.location.href,
+      publicProfileUrl: "",
     };
 
     // --- Name ---
@@ -178,6 +179,20 @@
       }
     }
     data.openToWork = data.openToWork.trim();
+
+    // --- Public LinkedIn profile URL ---
+    // Look for links pointing to linkedin.com/in/ on the recruiter profile page
+    const allLinks = document.querySelectorAll('a[href*="linkedin.com/in/"], a[href*="/in/"]');
+    for (const link of allLinks) {
+      const href = link.getAttribute("href") || "";
+      const match = href.match(/(?:https?:\/\/(?:www\.)?linkedin\.com)?\/in\/[\w-]+/);
+      if (match) {
+        data.publicProfileUrl = match[0].startsWith("/in/")
+          ? "https://www.linkedin.com" + match[0]
+          : match[0];
+        break;
+      }
+    }
 
     // --- Current job (from experience or headline) ---
     if (data.experience.length > 0) {

@@ -500,6 +500,7 @@ function parseScreeningResponse(content, profile) {
         currentJob: parsed.currentJob || "",
         currentLocation: parsed.currentLocation || "",
         profileUrl: profile.profileUrl || "",
+        publicProfileUrl: profile.publicProfileUrl || "",
         openToWorkTitles: parsed.openToWorkTitles || "Not specified",
         onSiteLocationPreferred: parsed.onSiteLocationPreferred || "Not specified",
         practiceArea: parsed.practiceArea || "Not specified",
@@ -541,6 +542,7 @@ async function sendRecruiterEmailAlert(data) {
         currentJob: data.currentJob,
         currentLocation: data.currentLocation,
         profileUrl: data.profileUrl,
+        publicProfileUrl: data.publicProfileUrl,
         recruiterNote: data.recruiterNote,
         timestamp: new Date().toISOString(),
       }),
@@ -578,6 +580,7 @@ async function pushToGoogleSheet(candidateData) {
       readyToMove: candidateData.readyToMove,
       physicalMove: candidateData.physicalMove ? "YES - RELOCATING" : "No",
       physicalMoveNote: candidateData.physicalMoveNote,
+      publicProfileUrl: candidateData.publicProfileUrl,
       timestamp: new Date().toISOString(),
     }),
   });

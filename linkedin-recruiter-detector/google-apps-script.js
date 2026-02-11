@@ -21,6 +21,7 @@
  *    L1:  Ready to Move
  *    M1:  Physical Move?
  *    N1:  Relocation Note
+ *    O1:  Public LinkedIn URL
  *
  * 3. Click Extensions > Apps Script
  * 4. Delete any existing code and paste this entire file
@@ -83,6 +84,7 @@ function handleAddCandidate(data) {
   sheet.getRange(2, 12).setValue(data.readyToMove || "");
   sheet.getRange(2, 13).setValue(data.physicalMove || "");
   sheet.getRange(2, 14).setValue(data.physicalMoveNote || "");
+  sheet.getRange(2, 15).setValue(data.publicProfileUrl || "");
 
   // Highlight relocating candidates
   if (data.physicalMove === "YES - RELOCATING") {
@@ -132,8 +134,10 @@ function handleRecruiterAlert(data) {
     + "<td style='padding: 8px;'>" + (data.currentLocation || "Unknown") + "</td></tr>"
     + "<tr style='background: #f9f9f9;'><td style='padding: 8px; font-weight: bold; color: #555;'>Intel</td>"
     + "<td style='padding: 8px;'>" + (data.recruiterNote || "None") + "</td></tr>"
-    + "<tr><td style='padding: 8px; font-weight: bold; color: #555;'>Profile</td>"
-    + "<td style='padding: 8px;'><a href='" + (data.profileUrl || "#") + "'>View on LinkedIn</a></td></tr>"
+    + "<tr><td style='padding: 8px; font-weight: bold; color: #555;'>Recruiter Profile</td>"
+    + "<td style='padding: 8px;'><a href='" + (data.profileUrl || "#") + "'>View in Recruiter</a></td></tr>"
+    + "<tr style='background: #f9f9f9;'><td style='padding: 8px; font-weight: bold; color: #555;'>Public Profile</td>"
+    + "<td style='padding: 8px;'><a href='" + (data.publicProfileUrl || "#") + "'>View Public LinkedIn</a></td></tr>"
     + "</table>"
     + "<p style='color: #aaa; font-size: 11px; margin-top: 20px;'>Sent by LinkedIn Recruiter Detector — Voll Recruiting</p>"
     + "</div>";
