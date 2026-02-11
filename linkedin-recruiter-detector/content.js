@@ -3,6 +3,9 @@
  *
  * Monitors the LinkedIn Recruiter page for red notification badges
  * and sends alerts via the Chrome extension messaging system.
+ *
+ * SAFETY: Hard cap of 5 tabs per detection cycle. Immediate deduplication.
+ * Throttled observers. Filters out "Recommended matches".
  */
 
 (function () {
@@ -11,40 +14,47 @@
   const CONFIG = {
     POLL_MIN_MS: 2500,
     POLL_MAX_MS: 5500,
+    // Hard cap: never open more than this many tabs in a single cycle
+    MAX_TABS_PER_CYCLE: 5,
+    // Minimum time between tab-open batches (30 seconds)
+    TAB_COOLDOWN_MS: 30000,
+    // Minimum time between MutationObserver-triggered polls (5 seconds)
+    OBSERVER_THROTTLE_MS: 5000,
     // Selectors targeting the notification badge elements in LinkedIn Recruiter.
-    // LinkedIn uses several patterns — we cast a wide net.
     BADGE_SELECTORS: [
-      // Standard LinkedIn notification badge (red dot / count)
       ".notification-badge",
       ".notification-badge__count",
       '[data-test-notification-badge]',
-      // Nav bar notification indicators
       ".nav-item__badge-count",
       ".global-nav__notification-badge",
-      // Recruiter-specific badges
       ".recruiter-nav__badge",
       ".hp-nav__badge",
       ".hp-nav__badge-count",
-      // Generic badge patterns used across LinkedIn
       '[class*="badge-count"]',
       '[class*="notification-count"]',
-      // Bell icon badge specifically
       '.notification-bell .badge',
       '.notification-bell__badge',
-      // Catch-all for elements with aria labels indicating counts
       '[aria-label*="notification"]',
+    ],
+    // Notification text patterns to SKIP (not real candidate notifications)
+    SKIP_PATTERNS: [
+      "recommended match",
+      "recommended for you",
+      "suggested match",
+      "job suggestion",
     ],
   };
 
   let lastNotificationCount = 0;
   let isEnabled = true;
   let pollCount = 0;
-  // Track candidate URLs we've already opened to avoid duplicates
+  let lastTabOpenTime = 0;
+  let lastObserverPollTime = 0;
+  // IMMEDIATE dedup: add URLs here BEFORE sending to background
   let openedCandidateUrls = new Set();
 
   /**
    * Finds notification badge elements on the page and extracts the count.
-   * Returns { found: boolean, count: number, element: Element|null }
    */
   function detectNotificationBadge() {
     const debugInfo = [];
@@ -55,14 +65,12 @@
         debugInfo.push(`${selector}: ${elements.length} match(es)`);
       }
       for (const el of elements) {
-        // Check if the element is visible
         const style = window.getComputedStyle(el);
         if (style.display === "none" || style.visibility === "hidden") {
           debugInfo.push(`  ^ hidden (display:${style.display}, visibility:${style.visibility})`);
           continue;
         }
 
-        // Try to extract a numeric count from the element
         const text = (el.textContent || "").trim();
         const count = parseInt(text, 10);
 
@@ -71,8 +79,6 @@
           return { found: true, count, element: el };
         }
 
-        // Some badges are just a red dot with no number — check for
-        // red-ish background color which indicates an active notification
         const bgColor = style.backgroundColor;
         if (isRedish(bgColor)) {
           console.log(`[LNR] FOUND red badge via "${selector}" — bg: ${bgColor}`);
@@ -85,49 +91,29 @@
       }
     }
 
-    // Log debug info every 20 polls so the console isn't flooded
     if (pollCount % 20 === 0 && debugInfo.length > 0) {
       console.log("[LNR] Selector scan results:\n" + debugInfo.join("\n"));
     }
 
-    // Fallback: scan for any small element with a red background that looks
-    // like a notification dot (heuristic approach)
     return detectByColorHeuristic();
   }
 
-  /**
-   * Check if a CSS color string is "red-ish" (notification red).
-   */
   function isRedish(colorStr) {
     if (!colorStr) return false;
-
-    // Parse rgb/rgba
-    const match = colorStr.match(
-      /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/
-    );
+    const match = colorStr.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
     if (!match) return false;
-
     const r = parseInt(match[1], 10);
     const g = parseInt(match[2], 10);
     const b = parseInt(match[3], 10);
-
-    // Red notification badges typically have high red, low green/blue
     return r > 180 && g < 80 && b < 80;
   }
 
-  /**
-   * Heuristic: look for small visible elements with red backgrounds
-   * that are likely notification badges.
-   */
   function detectByColorHeuristic() {
-    // Look in the top navigation area (first 80px from top)
     const candidates = document.querySelectorAll(
       'nav *, header *, [role="navigation"] *, [class*="nav"] *'
     );
-
     for (const el of candidates) {
       const rect = el.getBoundingClientRect();
-      // Notification badges are small (typically < 30px)
       if (rect.width > 30 || rect.height > 30) continue;
       if (rect.width < 5 || rect.height < 5) continue;
 
@@ -137,51 +123,86 @@
       if (isRedish(style.backgroundColor)) {
         const text = (el.textContent || "").trim();
         const count = parseInt(text, 10);
-        return {
-          found: true,
-          count: count > 0 ? count : 1,
-          element: el,
-        };
+        return { found: true, count: count > 0 ? count : 1, element: el };
       }
     }
-
     return { found: false, count: 0, element: null };
   }
 
   /**
-   * Extracts "View Candidate" profile URLs from the notification dropdown.
-   * Looks for links with text like "View Candidate" and returns their hrefs.
+   * Check if a notification's surrounding text indicates it's a
+   * "Recommended matches" type notification (not a real candidate alert).
+   */
+  function isSkippableNotification(linkElement) {
+    // Check the link's own text and its parent notification item's text
+    const textToCheck = [];
+    textToCheck.push((linkElement.textContent || "").toLowerCase());
+
+    // Walk up to 3 parents to find the notification container text
+    let parent = linkElement.parentElement;
+    for (let i = 0; i < 3 && parent; i++) {
+      textToCheck.push((parent.textContent || "").toLowerCase());
+      parent = parent.parentElement;
+    }
+
+    const combined = textToCheck.join(" ");
+    return CONFIG.SKIP_PATTERNS.some((pattern) => combined.includes(pattern));
+  }
+
+  /**
+   * Extracts candidate profile URLs from the notification dropdown.
+   * Filters out "Recommended matches" and already-opened URLs.
+   * Returns at most MAX_TABS_PER_CYCLE new URLs.
    */
   function extractCandidateLinks() {
     const urls = [];
+    const seen = new Set();
 
     // Strategy 1: Find links containing "View Candidate" text
     const allLinks = document.querySelectorAll("a");
     for (const link of allLinks) {
-      const text = (link.textContent || "").trim();
-      if (
-        text.toLowerCase().includes("view candidate") &&
-        link.href &&
-        !openedCandidateUrls.has(link.href)
-      ) {
-        urls.push(link.href);
+      const text = (link.textContent || "").trim().toLowerCase();
+      if (!text.includes("view candidate")) continue;
+      if (!link.href) continue;
+
+      // Normalize URL (strip hash/query variations for dedup)
+      const normalizedUrl = normalizeUrl(link.href);
+      if (openedCandidateUrls.has(normalizedUrl)) continue;
+      if (seen.has(normalizedUrl)) continue;
+
+      // Skip "Recommended matches" notifications
+      if (isSkippableNotification(link)) {
+        console.log("[LNR] Skipping recommended match:", link.href);
+        continue;
       }
+
+      seen.add(normalizedUrl);
+      urls.push(link.href);
+
+      if (urls.length >= CONFIG.MAX_TABS_PER_CYCLE) break;
     }
 
-    // Strategy 2: Look inside notification list items for profile links
-    const notifSelectors = [
-      '[class*="notification"] a[href*="/profile/"]',
-      '[class*="notification"] a[href*="/recruiter/"]',
-      '[class*="notification"] a[href*="/talent/"]',
-      '.notification-list a[href]',
-      '[data-test-notification] a[href]',
-    ];
-    for (const selector of notifSelectors) {
-      const links = document.querySelectorAll(selector);
-      for (const link of links) {
-        if (link.href && !openedCandidateUrls.has(link.href) && !urls.includes(link.href)) {
+    // Strategy 2: Look inside notification items for profile links
+    if (urls.length < CONFIG.MAX_TABS_PER_CYCLE) {
+      const notifSelectors = [
+        '[class*="notification"] a[href*="/profile/"]',
+        '[class*="notification"] a[href*="/talent/"]',
+      ];
+      for (const selector of notifSelectors) {
+        const links = document.querySelectorAll(selector);
+        for (const link of links) {
+          if (!link.href) continue;
+          const normalizedUrl = normalizeUrl(link.href);
+          if (openedCandidateUrls.has(normalizedUrl)) continue;
+          if (seen.has(normalizedUrl)) continue;
+          if (isSkippableNotification(link)) continue;
+
+          seen.add(normalizedUrl);
           urls.push(link.href);
+
+          if (urls.length >= CONFIG.MAX_TABS_PER_CYCLE) break;
         }
+        if (urls.length >= CONFIG.MAX_TABS_PER_CYCLE) break;
       }
     }
 
@@ -189,26 +210,65 @@
   }
 
   /**
-   * Watches for the notification dropdown to appear in the DOM.
-   * When it opens, scrape candidate links and send them to background.
+   * Normalize a URL for deduplication — strip hash and some query noise.
+   */
+  function normalizeUrl(url) {
+    try {
+      const u = new URL(url);
+      u.hash = "";
+      return u.origin + u.pathname;
+    } catch {
+      return url;
+    }
+  }
+
+  /**
+   * Safely send candidate URLs to background for tab opening.
+   * Enforces cooldown and immediate dedup.
+   */
+  function sendCandidateUrls(urls) {
+    if (!urls || urls.length === 0) return;
+
+    const now = Date.now();
+    if (now - lastTabOpenTime < CONFIG.TAB_COOLDOWN_MS) {
+      console.log(`[LNR] Tab cooldown active — skipping ${urls.length} URLs (${Math.round((CONFIG.TAB_COOLDOWN_MS - (now - lastTabOpenTime)) / 1000)}s remaining)`);
+      return;
+    }
+
+    // IMMEDIATELY mark these as opened BEFORE sending to background
+    // This prevents re-sending on the next poll/observer cycle
+    for (const url of urls) {
+      openedCandidateUrls.add(normalizeUrl(url));
+    }
+    lastTabOpenTime = now;
+
+    console.log(`[LNR] Opening ${urls.length} candidate tab(s) (max ${CONFIG.MAX_TABS_PER_CYCLE})`);
+
+    chrome.runtime.sendMessage({
+      type: "CANDIDATE_LINKS_FOUND",
+      candidateUrls: urls,
+      timestamp: now,
+    });
+  }
+
+  /**
+   * Watches for the notification dropdown to appear.
+   * THROTTLED: won't re-fire within OBSERVER_THROTTLE_MS.
    */
   function setupNotificationDropdownObserver() {
     const observer = new MutationObserver(() => {
-      // Check if a notification dropdown/panel just appeared
+      const now = Date.now();
+      if (now - lastObserverPollTime < CONFIG.OBSERVER_THROTTLE_MS) return;
+
       const dropdowns = document.querySelectorAll(
         '[class*="notification-dropdown"], [class*="notification-list"], [class*="notifications-dropdown"], [class*="notification-panel"], [aria-label*="Notification"]'
       );
       for (const dropdown of dropdowns) {
         if (dropdown.offsetParent !== null) {
-          // Dropdown is visible — extract links
+          lastObserverPollTime = now;
           const urls = extractCandidateLinks();
-          if (urls.length > 0) {
-            chrome.runtime.sendMessage({
-              type: "CANDIDATE_LINKS_FOUND",
-              candidateUrls: urls,
-              timestamp: Date.now(),
-            });
-          }
+          sendCandidateUrls(urls);
+          return; // Only process once per mutation batch
         }
       }
     });
@@ -220,8 +280,7 @@
   }
 
   /**
-   * One-time page diagnostic — logs what the extension can see so we can
-   * figure out the correct selectors if detection isn't working.
+   * One-time page diagnostic.
    */
   function runPageDiagnostic() {
     console.log("[LNR] ═══════════════════════════════════════════");
@@ -229,25 +288,21 @@
     console.log("[LNR] URL:", window.location.href);
     console.log("[LNR] Title:", document.title);
 
-    // Check for nav/header elements
     const nav = document.querySelector("nav");
     const header = document.querySelector("header");
     console.log("[LNR] Has <nav>:", !!nav);
     console.log("[LNR] Has <header>:", !!header);
 
-    // Look for anything bell/notification related
     const bellKeywords = ["bell", "notif", "badge", "alert", "inbox", "messaging"];
     const found = [];
     for (const kw of bellKeywords) {
       const matches = document.querySelectorAll(`[class*="${kw}"], [id*="${kw}"], [data-test*="${kw}"], [aria-label*="${kw}"]`);
-      if (matches.length > 0) {
-        for (const m of matches) {
-          const tag = m.tagName.toLowerCase();
-          const cls = (m.className || "").toString().substring(0, 100);
-          const txt = (m.textContent || "").trim().substring(0, 50);
-          const aria = m.getAttribute("aria-label") || "";
-          found.push(`  [${kw}] <${tag}> class="${cls}" text="${txt}" aria="${aria}"`);
-        }
+      for (const m of matches) {
+        const tag = m.tagName.toLowerCase();
+        const cls = (m.className || "").toString().substring(0, 100);
+        const txt = (m.textContent || "").trim().substring(0, 50);
+        const aria = m.getAttribute("aria-label") || "";
+        found.push(`  [${kw}] <${tag}> class="${cls}" text="${txt}" aria="${aria}"`);
       }
     }
     if (found.length > 0) {
@@ -256,7 +311,6 @@
       console.log("[LNR] WARNING: No bell/notification elements found on page!");
     }
 
-    // Look for any element with red background in the nav area
     const navEl = nav || header || document.body;
     const redElements = [];
     const allNavChildren = navEl.querySelectorAll("*");
@@ -277,8 +331,7 @@
   }
 
   /**
-   * Main polling loop. Checks for notification badges and notifies
-   * the background script when changes are detected.
+   * Main polling loop.
    */
   function poll() {
     if (!isEnabled) return;
@@ -290,22 +343,28 @@
       const isNewNotification = result.count > lastNotificationCount;
       lastNotificationCount = result.count;
 
-      // Extract "View Candidate" links from the notification dropdown
-      const candidateUrls = extractCandidateLinks();
+      // Only extract and open links when the count INCREASES
+      let candidateUrls = [];
+      if (isNewNotification) {
+        candidateUrls = extractCandidateLinks();
+      }
 
       chrome.runtime.sendMessage({
         type: "NOTIFICATION_DETECTED",
         count: result.count,
-        candidateUrls,
+        candidateUrls: [], // Don't send URLs here — use sendCandidateUrls instead
         isNewNotification,
         url: window.location.href,
         timestamp: Date.now(),
       });
 
-      // Add a subtle visual indicator on the page
+      // Open tabs through the safe, throttled path
+      if (isNewNotification && candidateUrls.length > 0) {
+        sendCandidateUrls(candidateUrls);
+      }
+
       showDetectionIndicator(result.count);
     } else if (!result.found && lastNotificationCount > 0) {
-      // Notifications cleared
       lastNotificationCount = 0;
       chrome.runtime.sendMessage({
         type: "NOTIFICATIONS_CLEARED",
@@ -316,10 +375,8 @@
     }
   }
 
-  /**
-   * Shows a persistent status indicator in the bottom-right corner
-   * so you always know the extension is running.
-   */
+  // ─── UI Indicators ────────────────────────────────────────────────
+
   function showStatusIndicator() {
     let status = document.getElementById("lnr-status-indicator");
     if (!status) {
@@ -339,9 +396,6 @@
     }
   }
 
-  /**
-   * Shows a small floating indicator that the extension detected notifications.
-   */
   function showDetectionIndicator(count) {
     let indicator = document.getElementById("lnr-detector-indicator");
     if (!indicator) {
@@ -362,13 +416,15 @@
     updateStatusIndicator(`LNR Active — Scanning... (${pollCount} checks)`, "#888");
   }
 
-  /**
-   * Also observe DOM mutations so we catch dynamically loaded badges
-   * without waiting for the next poll cycle.
-   */
+  // ─── MutationObserver (THROTTLED) ─────────────────────────────────
+
   function setupMutationObserver() {
+    let throttleTimer = null;
+
     const observer = new MutationObserver((mutations) => {
-      // Only re-check if something in the nav/header area changed
+      // Throttle: only allow one poll per OBSERVER_THROTTLE_MS
+      if (throttleTimer) return;
+
       for (const mutation of mutations) {
         const target = mutation.target;
         if (
@@ -378,6 +434,9 @@
             target.closest('[role="navigation"]') ||
             target.closest('[class*="nav"]'))
         ) {
+          throttleTimer = setTimeout(() => {
+            throttleTimer = null;
+          }, CONFIG.OBSERVER_THROTTLE_MS);
           poll();
           return;
         }
@@ -392,13 +451,12 @@
     });
   }
 
-  // Listen for enable/disable messages from popup
+  // ─── Message Handling ─────────────────────────────────────────────
+
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "SET_ENABLED") {
       isEnabled = message.enabled;
-      if (!isEnabled) {
-        removeDetectionIndicator();
-      }
+      if (!isEnabled) removeDetectionIndicator();
     }
     if (message.type === "GET_STATUS") {
       chrome.runtime.sendMessage({
@@ -409,14 +467,14 @@
       });
     }
     if (message.type === "TABS_OPENED") {
-      // Track which URLs we already opened so we don't re-open them
       for (const url of message.urls) {
-        openedCandidateUrls.add(url);
+        openedCandidateUrls.add(normalizeUrl(url));
       }
     }
   });
 
-  // Randomized delay helper — avoids fixed-interval fingerprinting
+  // ─── Helpers ──────────────────────────────────────────────────────
+
   function randomDelay(minMs, maxMs) {
     return Math.floor(Math.random() * (maxMs - minMs)) + minMs;
   }
@@ -428,14 +486,14 @@
     }, randomDelay(CONFIG.POLL_MIN_MS, CONFIG.POLL_MAX_MS));
   }
 
-  // Start detection
+  // ─── Start ────────────────────────────────────────────────────────
   showStatusIndicator();
   runPageDiagnostic();
   setupMutationObserver();
   setupNotificationDropdownObserver();
   schedulePoll();
-  // Run immediately on load
   poll();
 
   console.log("[LNR] Content script loaded and scanning on:", window.location.href);
+  console.log(`[LNR] Safety limits: max ${CONFIG.MAX_TABS_PER_CYCLE} tabs/cycle, ${CONFIG.TAB_COOLDOWN_MS / 1000}s cooldown between batches`);
 })();

@@ -28,6 +28,9 @@ let screeningQueue = [];
 let isScreening = false;
 // Track which tabs were auto-opened by the extension
 let autoOpenedTabIds = new Set();
+// Dedup: track URLs we've already opened (normalized)
+let openedUrls = new Set();
+const MAX_TABS_PER_BATCH = 5;
 
 // ─── Analytics Data Structure ───────────────────────────────────────
 
@@ -241,21 +244,59 @@ function handleNotificationsCleared() {
 }
 
 /**
+ * Normalize URL for deduplication — strip hash and query noise.
+ */
+function normalizeUrl(url) {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.origin + u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Opens candidate profile URLs in new background tabs.
  * Appends #lnr-auto to the URL so the profile scraper knows
  * this tab was auto-opened (not manual browsing).
+ *
+ * SAFETY: Deduplicates URLs, enforces a hard cap of MAX_TABS_PER_BATCH.
  */
 function openCandidateTabs(urls, sender) {
   if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
 
-  const opened = [];
+  // Filter out already-opened URLs
+  const newUrls = [];
   for (const url of urls) {
-    // Tag URL so profile-scraper.js knows to scrape it
+    const norm = normalizeUrl(url);
+    if (!openedUrls.has(norm)) {
+      openedUrls.add(norm);
+      newUrls.push(url);
+    }
+  }
+
+  // Enforce hard cap
+  const toOpen = newUrls.slice(0, MAX_TABS_PER_BATCH);
+
+  if (toOpen.length === 0) {
+    console.log("[LNR Background] All URLs already opened — skipping.");
+    return;
+  }
+
+  if (newUrls.length > MAX_TABS_PER_BATCH) {
+    console.warn(`[LNR Background] Capped from ${newUrls.length} to ${MAX_TABS_PER_BATCH} tabs.`);
+  }
+
+  console.log(`[LNR Background] Opening ${toOpen.length} tab(s).`);
+
+  const opened = [];
+  for (const url of toOpen) {
     const taggedUrl = url.includes("#") ? `${url}&lnr-auto` : `${url}#lnr-auto`;
     chrome.tabs.create({ url: taggedUrl, active: false }, (tab) => {
       if (tab) autoOpenedTabIds.add(tab.id);
       opened.push(url);
-      if (opened.length === urls.length && sender && sender.tab) {
+      if (opened.length === toOpen.length && sender && sender.tab) {
         chrome.tabs.sendMessage(sender.tab.id, {
           type: "TABS_OPENED",
           urls: opened,
