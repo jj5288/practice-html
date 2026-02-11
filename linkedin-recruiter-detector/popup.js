@@ -27,6 +27,15 @@ const saveSheetUrlBtn = document.getElementById("saveSheetUrl");
 const saveMsg = document.getElementById("saveMsg");
 const resetBtn = document.getElementById("resetAnalytics");
 
+// LLM model elements
+const llmPresetSelect = document.getElementById("llmPreset");
+const llmApiKeyInput = document.getElementById("llmApiKey");
+const llmCustomApiUrl = document.getElementById("llmCustomApiUrl");
+const llmCustomModelId = document.getElementById("llmCustomModelId");
+const customModelFields = document.getElementById("customModelFields");
+const saveLlmBtn = document.getElementById("saveLlmSettings");
+const llmSaveMsg = document.getElementById("llmSaveMsg");
+
 // Store sheetsWebhookUrl so we can open it on click
 let sheetsUrl = "";
 
@@ -39,6 +48,59 @@ if (todayLabel) {
   const day = now.getDate();
   todayLabel.textContent = `Today (${month} ${day})`;
 }
+
+// ─── Load Model Presets + Settings ──────────────────────────────────
+
+chrome.runtime.sendMessage({ type: "GET_MODEL_PRESETS" }, (resp) => {
+  if (!resp || !resp.presets) return;
+  const presets = resp.presets;
+
+  // Populate dropdown
+  llmPresetSelect.innerHTML = "";
+  for (const [key, preset] of Object.entries(presets)) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = preset.label;
+    llmPresetSelect.appendChild(opt);
+  }
+
+  // Now load settings to set selected value
+  chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
+    if (!response) return;
+    const { settings } = response;
+
+    llmPresetSelect.value = settings.llmPreset || "kimi-k2.5";
+    llmApiKeyInput.value = settings.llmApiKey || "";
+    llmCustomApiUrl.value = settings.llmCustomApiUrl || "";
+    llmCustomModelId.value = settings.llmCustomModelId || "";
+    customModelFields.style.display = settings.llmPreset === "custom" ? "block" : "none";
+
+    // Update label to show active model name
+    const activePreset = presets[settings.llmPreset];
+    if (activePreset) {
+      const label = document.getElementById("autoScreenLabel");
+      if (label) label.textContent = `Auto-screen candidates (${activePreset.label})`;
+    }
+  });
+});
+
+llmPresetSelect.addEventListener("change", () => {
+  customModelFields.style.display = llmPresetSelect.value === "custom" ? "block" : "none";
+});
+
+saveLlmBtn.addEventListener("click", () => {
+  const llmSettings = {
+    llmPreset: llmPresetSelect.value,
+    llmApiKey: llmApiKeyInput.value.trim(),
+  };
+  if (llmPresetSelect.value === "custom") {
+    llmSettings.llmCustomApiUrl = llmCustomApiUrl.value.trim();
+    llmSettings.llmCustomModelId = llmCustomModelId.value.trim();
+  }
+  chrome.runtime.sendMessage({ type: "UPDATE_SETTINGS", settings: llmSettings });
+  llmSaveMsg.style.display = "inline";
+  setTimeout(() => { llmSaveMsg.style.display = "none"; }, 2000);
+});
 
 // ─── Load Settings ──────────────────────────────────────────────────
 

@@ -2,11 +2,71 @@
  * Background service worker for LinkedIn Recruiter Notification Detector.
  *
  * - Desktop notifications + badge updates
- * - Candidate screening via Kimi K2.5 LLM (fit score, salary, practice area, etc.)
+ * - Candidate screening via configurable LLM (fit score, salary, practice area, etc.)
  * - Legal recruiter detection + email alerts
  * - Google Sheets integration
  * - Recruiting analytics/intelligence
  */
+
+// ─── LLM Model Presets ──────────────────────────────────────────────
+// Add new models here — they'll appear in the Settings dropdown automatically.
+
+const MODEL_PRESETS = {
+  "kimi-k2.5": {
+    label: "Kimi K2.5 (NVIDIA)",
+    apiUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
+    modelId: "moonshotai/kimi-k2.5",
+    provider: "nvidia",
+  },
+  "deepseek-r1": {
+    label: "DeepSeek R1 (NVIDIA)",
+    apiUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
+    modelId: "deepseek-ai/deepseek-r1",
+    provider: "nvidia",
+  },
+  "llama-3.1-70b": {
+    label: "Llama 3.1 70B (NVIDIA)",
+    apiUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
+    modelId: "meta/llama-3.1-70b-instruct",
+    provider: "nvidia",
+  },
+  "llama-3.1-405b": {
+    label: "Llama 3.1 405B (NVIDIA)",
+    apiUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
+    modelId: "meta/llama-3.1-405b-instruct",
+    provider: "nvidia",
+  },
+  "mistral-large": {
+    label: "Mistral Large (NVIDIA)",
+    apiUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
+    modelId: "mistralai/mistral-large-2-instruct",
+    provider: "nvidia",
+  },
+  "gpt-4o": {
+    label: "GPT-4o (OpenAI)",
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    modelId: "gpt-4o",
+    provider: "openai",
+  },
+  "gpt-4o-mini": {
+    label: "GPT-4o Mini (OpenAI)",
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    modelId: "gpt-4o-mini",
+    provider: "openai",
+  },
+  "claude-sonnet": {
+    label: "Claude Sonnet 4.5 (Anthropic)",
+    apiUrl: "https://api.anthropic.com/v1/messages",
+    modelId: "claude-sonnet-4-5-20250929",
+    provider: "anthropic",
+  },
+  "custom": {
+    label: "Custom Model",
+    apiUrl: "",
+    modelId: "",
+    provider: "openai-compatible",
+  },
+};
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -17,11 +77,12 @@ const DEFAULT_SETTINGS = {
   logRejected: true,       // When true, push rejected candidates to "Rejected" sheet tab
   sheetsWebhookUrl: "",
   soundAlert: false,
+  // LLM configuration
+  llmPreset: "kimi-k2.5",
+  llmApiKey: "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",
+  llmCustomApiUrl: "",
+  llmCustomModelId: "",
 };
-
-const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const NVIDIA_API_KEY =
-  "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";
 
 // Track state
 let currentCount = 0;
@@ -125,6 +186,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "GET_SETTINGS") {
     sendResponse({ settings, currentCount });
+    return true;
+  }
+  if (message.type === "GET_MODEL_PRESETS") {
+    sendResponse({ presets: MODEL_PRESETS });
     return true;
   }
   if (message.type === "GET_ANALYTICS") {
@@ -635,18 +700,53 @@ function categorizeRejection(reason) {
 
 // ─── LLM Screening ─────────────────────────────────────────────────
 
+/**
+ * Get the active LLM configuration from settings + presets.
+ */
+function getLlmConfig() {
+  const preset = MODEL_PRESETS[settings.llmPreset] || MODEL_PRESETS["kimi-k2.5"];
+  const apiKey = settings.llmApiKey || "";
+
+  if (settings.llmPreset === "custom") {
+    return {
+      apiUrl: settings.llmCustomApiUrl || "",
+      modelId: settings.llmCustomModelId || "",
+      provider: "openai-compatible",
+      apiKey,
+    };
+  }
+
+  return {
+    apiUrl: preset.apiUrl,
+    modelId: preset.modelId,
+    provider: preset.provider,
+    apiKey,
+  };
+}
+
 async function screenCandidate(profile) {
   const prompt = buildScreeningPrompt(profile);
+  const llm = getLlmConfig();
 
-  const response = await fetch(NVIDIA_API_URL, {
+  if (!llm.apiKey) {
+    throw new Error("No API key configured. Go to Settings > AI Model to add one.");
+  }
+
+  // Anthropic uses a different API format
+  if (llm.provider === "anthropic") {
+    return screenCandidateAnthropic(prompt, profile, llm);
+  }
+
+  // OpenAI-compatible format (NVIDIA, OpenAI, OpenRouter, etc.)
+  const response = await fetch(llm.apiUrl, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${NVIDIA_API_KEY}`,
+      Authorization: `Bearer ${llm.apiKey}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
     body: JSON.stringify({
-      model: "moonshotai/kimi-k2.5",
+      model: llm.modelId,
       messages: [{ role: "user", content: prompt }],
       max_tokens: 4096,
       temperature: 0.1,
@@ -656,11 +756,41 @@ async function screenCandidate(profile) {
   });
 
   if (!response.ok) {
-    throw new Error(`Kimi API error: ${response.status} ${response.statusText}`);
+    const errText = await response.text().catch(() => "");
+    throw new Error(`LLM API error (${llm.modelId}): ${response.status} ${response.statusText} ${errText}`);
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || "";
+  return parseScreeningResponse(content, profile);
+}
+
+/**
+ * Anthropic uses a different request/response format.
+ */
+async function screenCandidateAnthropic(prompt, profile, llm) {
+  const response = await fetch(llm.apiUrl, {
+    method: "POST",
+    headers: {
+      "x-api-key": llm.apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: llm.modelId,
+      max_tokens: 4096,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    throw new Error(`Anthropic API error: ${response.status} ${response.statusText} ${errText}`);
+  }
+
+  const data = await response.json();
+  const content = data.content?.[0]?.text || "";
   return parseScreeningResponse(content, profile);
 }
 

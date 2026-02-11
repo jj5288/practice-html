@@ -473,7 +473,7 @@
 
     <div class="section-label">Screening</div>
     <div class="setting-row">
-      <span class="setting-label">Auto-screen candidates (Kimi AI)</span>
+      <span class="setting-label" id="autoScreenLabel">Auto-screen candidates (AI)</span>
       <label class="toggle">
         <input type="checkbox" id="toggleAutoScreen" checked>
         <span class="toggle-slider"></span>
@@ -493,6 +493,32 @@
         <span class="toggle-slider"></span>
       </label>
     </div>
+
+    <div class="section-label">AI Model</div>
+    <div class="url-input-group">
+      <label for="llmPreset">Model</label>
+      <select id="llmPreset" style="width:100%;padding:6px 8px;border:1px solid #333;border-radius:6px;background:#16213e;color:#eee;font-size:12px;outline:none;">
+      </select>
+    </div>
+    <div class="url-input-group">
+      <label for="llmApiKey">API Key</label>
+      <input type="password" id="llmApiKey" placeholder="Enter API key" style="width:100%;padding:6px 8px;border:1px solid #333;border-radius:6px;background:#16213e;color:#eee;font-size:12px;outline:none;">
+    </div>
+    <div id="customModelFields" style="display:none;">
+      <div class="url-input-group">
+        <label for="llmCustomApiUrl">Custom API URL</label>
+        <input type="url" id="llmCustomApiUrl" placeholder="https://api.example.com/v1/chat/completions" style="width:100%;padding:6px 8px;border:1px solid #333;border-radius:6px;background:#16213e;color:#eee;font-size:12px;outline:none;">
+      </div>
+      <div class="url-input-group">
+        <label for="llmCustomModelId">Custom Model ID</label>
+        <input type="text" id="llmCustomModelId" placeholder="e.g. my-org/my-model" style="width:100%;padding:6px 8px;border:1px solid #333;border-radius:6px;background:#16213e;color:#eee;font-size:12px;outline:none;">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="save-btn" id="saveLlmSettings">Save Model</button>
+      <span class="save-msg" id="llmSaveMsg">Saved!</span>
+    </div>
+    <p style="font-size:10px;color:#666;margin-top:4px;">Supports NVIDIA, OpenAI, Anthropic, or any OpenAI-compatible API</p>
 
     <div class="section-label">Google Sheets</div>
     <div class="url-input-group">
