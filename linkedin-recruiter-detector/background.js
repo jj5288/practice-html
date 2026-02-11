@@ -30,7 +30,7 @@ let isScreening = false;
 let autoOpenedTabIds = new Set();
 // Dedup: track URLs we've already opened (normalized)
 let openedUrls = new Set();
-const MAX_TABS_PER_BATCH = 5;
+const MAX_TABS_PER_BATCH = 50;
 
 // ─── Analytics Data Structure ───────────────────────────────────────
 
@@ -93,6 +93,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "PROFILE_SCRAPED") {
     handleProfileScraped(message, sender);
+  }
+  if (message.type === "CHECK_AUTO_OPENED") {
+    // Profile scraper asks: "Was I auto-opened by the extension?"
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    const isAutoOpened = tabId ? autoOpenedTabIds.has(tabId) : false;
+    console.log(`[LNR Background] CHECK_AUTO_OPENED for tab ${tabId}: ${isAutoOpened}`);
+    sendResponse({ autoOpened: isAutoOpened });
+    return true;
   }
   if (message.type === "GET_SETTINGS") {
     sendResponse({ settings, currentCount });
@@ -292,8 +300,8 @@ function openCandidateTabs(urls, sender) {
 
   const opened = [];
   for (const url of toOpen) {
-    const taggedUrl = url.includes("#") ? `${url}&lnr-auto` : `${url}#lnr-auto`;
-    chrome.tabs.create({ url: taggedUrl, active: false }, (tab) => {
+    // No longer need #lnr-auto hash — we track by tab ID instead
+    chrome.tabs.create({ url, active: false }, (tab) => {
       if (tab) autoOpenedTabIds.add(tab.id);
       opened.push(url);
       if (opened.length === toOpen.length && sender && sender.tab) {
@@ -320,6 +328,17 @@ function broadcastToContentScripts(message) {
 // Clean up auto-opened tab tracking when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
   autoOpenedTabIds.delete(tabId);
+});
+
+// When an auto-opened tab finishes loading, send START_SCRAPE as a backup
+// (in case the content script's CHECK_AUTO_OPENED message raced with tab creation)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "complete" && autoOpenedTabIds.has(tabId)) {
+    console.log(`[LNR Background] Auto-opened tab ${tabId} loaded — sending START_SCRAPE.`);
+    chrome.tabs.sendMessage(tabId, { type: "START_SCRAPE" }).catch(() => {
+      // Content script may not be ready yet, that's OK — CHECK_AUTO_OPENED handles it
+    });
+  }
 });
 
 // ─── Candidate Screening Pipeline ───────────────────────────────────

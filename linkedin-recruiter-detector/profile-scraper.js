@@ -1,8 +1,9 @@
 /**
  * Profile Scraper - runs on LinkedIn Recruiter profile pages.
  *
- * SAFETY: Only scrapes profiles that were auto-opened by the extension
- * (tagged via URL hash). Respects robots meta tags. Uses randomized delays.
+ * SAFETY: Only scrapes when the background script confirms this tab
+ * was auto-opened by the extension. Respects robots meta tags.
+ * Uses randomized delays.
  *
  * Extracts candidate data from the profile and sends it to the
  * background script for screening via the Kimi K2.5 LLM.
@@ -11,19 +12,33 @@
 (function () {
   "use strict";
 
-  // ─── Safety Gate: Only scrape auto-opened tabs ────────────────────
-  // The background script appends #lnr-auto to URLs it opens.
-  // If this hash isn't present, the user navigated here manually — don't scrape.
-  if (!window.location.hash.includes("lnr-auto")) {
-    console.log("[LNR Detector] Profile not auto-opened — skipping scrape.");
-    return;
-  }
+  let hasScraped = false;
 
-  // Clean the hash from the URL so it doesn't look suspicious
-  if (history.replaceState) {
-    const cleanUrl = window.location.href.replace(/#lnr-auto/, "").replace(/#$/, "");
-    history.replaceState(null, "", cleanUrl);
-  }
+  // ─── Ask background if we should scrape this tab ──────────────────
+  // The background tracks which tab IDs it auto-opened.
+  // This is more reliable than URL hash which can get stripped.
+  chrome.runtime.sendMessage({ type: "CHECK_AUTO_OPENED" }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.log("[LNR Scraper] Could not reach background:", chrome.runtime.lastError.message);
+      return;
+    }
+
+    if (response && response.autoOpened) {
+      console.log("[LNR Scraper] Background confirmed auto-opened tab — will scrape.");
+      setTimeout(scrapeProfile, randomDelay(2000, 4500));
+    } else {
+      console.log("[LNR Scraper] Not auto-opened — skipping scrape.");
+    }
+  });
+
+  // Also listen for a direct START_SCRAPE message from background
+  // (backup trigger in case the CHECK_AUTO_OPENED races with tab creation)
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "START_SCRAPE" && !hasScraped) {
+      console.log("[LNR Scraper] Received START_SCRAPE from background.");
+      setTimeout(scrapeProfile, randomDelay(2000, 4500));
+    }
+  });
 
   // ─── Safety Gate: Respect robots meta tags ────────────────────────
   function isScrapingAllowed() {
@@ -47,10 +62,11 @@
   const MAX_ATTEMPTS = 15;
 
   function scrapeProfile() {
+    if (hasScraped) return;
     scrapeAttempts++;
 
     if (!isScrapingAllowed()) {
-      console.log("[LNR Detector] Page robots meta disallows scraping — skipping.");
+      console.log("[LNR Scraper] Page robots meta disallows scraping — skipping.");
       return;
     }
 
@@ -60,12 +76,15 @@
     if (!profileData.rawText || profileData.rawText.length < 100) {
       // Page likely hasn't loaded yet
       if (scrapeAttempts < MAX_ATTEMPTS) {
+        console.log(`[LNR Scraper] Page not ready (attempt ${scrapeAttempts}/${MAX_ATTEMPTS}), retrying...`);
         setTimeout(scrapeProfile, randomDelay(1500, 3500));
         return;
       }
+      console.log("[LNR Scraper] Max attempts reached — scraping with what we have.");
     }
 
-    console.log("[LNR Detector] Scraped profile data:", profileData);
+    hasScraped = true;
+    console.log("[LNR Scraper] Scraped profile data:", profileData.name, profileData.headline);
 
     // Send to background for LLM screening
     chrome.runtime.sendMessage({
@@ -181,7 +200,6 @@
     data.openToWork = data.openToWork.trim();
 
     // --- Public LinkedIn profile URL ---
-    // Look for links pointing to linkedin.com/in/ on the recruiter profile page
     const allLinks = document.querySelectorAll('a[href*="linkedin.com/in/"], a[href*="/in/"]');
     for (const link of allLinks) {
       const href = link.getAttribute("href") || "";
@@ -211,8 +229,5 @@
     return data;
   }
 
-  // Start scraping after a randomized delay (looks more human)
-  setTimeout(scrapeProfile, randomDelay(2000, 4500));
-
-  console.log("[LNR Detector] Profile scraper loaded (auto-opened tab).");
+  console.log("[LNR Scraper] Profile scraper loaded, checking with background...");
 })();

@@ -15,9 +15,9 @@
     POLL_MIN_MS: 2500,
     POLL_MAX_MS: 5500,
     // Hard cap: never open more than this many tabs in a single cycle
-    MAX_TABS_PER_CYCLE: 5,
-    // Minimum time between tab-open batches (30 seconds)
-    TAB_COOLDOWN_MS: 30000,
+    MAX_TABS_PER_CYCLE: 50,
+    // Minimum time between tab-open batches (10 seconds)
+    TAB_COOLDOWN_MS: 10000,
     // Minimum time between MutationObserver-triggered polls (5 seconds)
     OBSERVER_THROTTLE_MS: 5000,
     // Selectors targeting the notification badge elements in LinkedIn Recruiter.
