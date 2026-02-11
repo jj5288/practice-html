@@ -95,6 +95,18 @@ chrome.runtime.sendMessage({ type: "GET_ANALYTICS" }, (response) => {
   // Practice areas
   renderRankedList("practiceAreas", a.topPracticeAreas);
 
+  // Practice area demand heatmap
+  renderDemandHeatmap(a.practiceAreaDemand);
+
+  // Compensation intelligence
+  renderCompensationList(a.compensationSummary);
+
+  // Firm tier distribution
+  renderRankedList("firmTiers", a.topFirmTiers);
+
+  // Bar admissions
+  renderRankedList("barAdmissions", a.topBarAdmissions);
+
   // Rejection reasons
   renderRankedList("rejectionReasons", a.topRejectionReasons);
 });
@@ -170,6 +182,46 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+function renderDemandHeatmap(demand) {
+  const container = document.getElementById("demandHeatmap");
+  if (!demand || demand.length === 0) {
+    container.innerHTML = '<div class="empty-state">No data yet</div>';
+    return;
+  }
+
+  const maxCount = Math.max(...demand.map((d) => d.count), 1);
+
+  let html = '<table class="heatmap-table"><thead><tr><th>Practice Area</th><th>Location</th><th>#</th></tr></thead><tbody>';
+  for (const d of demand) {
+    const heatClass = d.count >= maxCount * 0.7 ? "heat-high" : d.count >= maxCount * 0.4 ? "heat-med" : "heat-low";
+    html += `<tr>
+      <td class="area-name">${escapeHtml(d.area)}</td>
+      <td class="loc-name">${escapeHtml(d.location)}</td>
+      <td><span class="heatmap-cell ${heatClass}">${d.count}</span></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function renderCompensationList(compData) {
+  const container = document.getElementById("compensationList");
+  if (!compData || compData.length === 0) {
+    container.innerHTML = '<li class="empty-state">No data yet</li>';
+    return;
+  }
+
+  container.innerHTML = "";
+  for (const c of compData) {
+    const li = document.createElement("li");
+    li.className = "comp-row";
+    li.innerHTML = `<span class="comp-area">${escapeHtml(c.area)}</span>
+      <span class="comp-salary">$${c.avgSalary.toLocaleString()}</span>
+      <span class="comp-count">(${c.sampleCount})</span>`;
+    container.appendChild(li);
+  }
 }
 
 // ─── Settings Event Handlers ────────────────────────────────────────

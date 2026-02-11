@@ -205,6 +205,52 @@
       padding: 20px 0;
     }
 
+    /* ─── Heatmap ─── */
+    .heatmap-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .heatmap-table th {
+      font-size: 9px;
+      color: #888;
+      text-transform: uppercase;
+      padding: 3px 4px;
+      text-align: left;
+    }
+    .heatmap-table td {
+      padding: 4px 6px;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .heatmap-table .area-name { color: #ccc; }
+    .heatmap-table .loc-name { color: #aaa; font-size: 10px; }
+    .heatmap-cell {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 11px;
+      text-align: center;
+      min-width: 24px;
+    }
+    .heat-high { background: #e94560; color: #fff; }
+    .heat-med { background: #c9395a; color: #fff; }
+    .heat-low { background: #4a2040; color: #ccc; }
+
+    /* Compensation row */
+    .comp-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      font-size: 12px;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .comp-row:last-child { border: none; }
+    .comp-area { color: #ccc; flex: 1; }
+    .comp-salary { color: #4ecca3; font-weight: 600; }
+    .comp-count { color: #666; font-size: 10px; margin-left: 6px; }
+
     /* ─── Help tab ─── */
     .help-section {
       background: #16213e;
@@ -360,6 +406,36 @@
       </ul>
     </div>
 
+    <!-- Practice Area × Location Demand Heatmap -->
+    <div class="intel-section">
+      <div class="intel-title">Practice Area Demand by Location</div>
+      <div id="demandHeatmap" class="empty-state">No data yet</div>
+    </div>
+
+    <!-- Compensation Intelligence -->
+    <div class="intel-section">
+      <div class="intel-title">Compensation Intelligence</div>
+      <ul class="ranked-list" id="compensationList">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
+
+    <!-- Firm Tier Distribution -->
+    <div class="intel-section">
+      <div class="intel-title">Firm Tier Distribution</div>
+      <ul class="ranked-list" id="firmTiers">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
+
+    <!-- Bar Admissions -->
+    <div class="intel-section">
+      <div class="intel-title">Top Bar Admissions</div>
+      <ul class="ranked-list" id="barAdmissions">
+        <li class="empty-state">No data yet</li>
+      </ul>
+    </div>
+
     <!-- Top rejection reasons -->
     <div class="intel-section">
       <div class="intel-title">Top Rejection Reasons</div>
@@ -483,7 +559,7 @@
     </div>
   </div>
 
-  <div class="footer">v2.2 — Screens candidates via Kimi K2.5 AI</div>
+  <div class="footer">v2.3 — Screens candidates via Kimi K2.5 AI</div>
 
   <script src="popup.js"></script>
 </body>

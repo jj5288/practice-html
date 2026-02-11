@@ -30,7 +30,7 @@ let screeningQueue = [];
 let isScreening = false;
 // Track which tabs were auto-opened by the extension
 let autoOpenedTabIds = new Set();
-// Dedup: track URLs we've already opened (normalized)
+// Dedup: track URLs we've already opened (normalized) — persisted across restarts
 let openedUrls = new Set();
 const MAX_TABS_PER_BATCH = 50;
 
@@ -50,6 +50,12 @@ const DEFAULT_ANALYTICS = {
   titleFrequency: {},
   locationFrequency: {},
   practiceAreaFrequency: {},
+  firmTierFrequency: {},
+  barAdmissionFrequency: {},
+  // Compensation intelligence: salary estimates by practice area + city
+  compensationData: [],
+  // Candidate history for market movement detection
+  candidateHistory: {},
 };
 
 let analytics = { ...DEFAULT_ANALYTICS };
@@ -61,7 +67,7 @@ chrome.storage.sync.get("settings", (result) => {
   }
 });
 
-chrome.storage.local.get("analytics", (result) => {
+chrome.storage.local.get(["analytics", "openedUrls"], (result) => {
   if (result.analytics) {
     analytics = { ...DEFAULT_ANALYTICS, ...result.analytics };
     if (!Array.isArray(analytics.notificationTimestamps)) analytics.notificationTimestamps = [];
@@ -74,11 +80,24 @@ chrome.storage.local.get("analytics", (result) => {
     }
     if (!analytics.practiceAreaFrequency) analytics.practiceAreaFrequency = {};
     if (!analytics.totalRecruiters) analytics.totalRecruiters = 0;
+    if (!analytics.compensationData) analytics.compensationData = [];
+    if (!analytics.candidateHistory) analytics.candidateHistory = {};
+  }
+  // Restore persistent dedup set
+  if (result.openedUrls && Array.isArray(result.openedUrls)) {
+    openedUrls = new Set(result.openedUrls);
+    console.log(`[LNR Background] Restored ${openedUrls.size} dedup URLs from storage.`);
   }
 });
 
 function saveAnalytics() {
   chrome.storage.local.set({ analytics });
+}
+
+function saveOpenedUrls() {
+  // Keep last 5000 URLs max to avoid storage bloat
+  const urls = [...openedUrls].slice(-5000);
+  chrome.storage.local.set({ openedUrls: urls });
 }
 
 // ─── Message Handling ───────────────────────────────────────────────
@@ -184,6 +203,15 @@ function computeAnalyticsSummary() {
     ? Math.round((responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) / 60000)
     : 0;
 
+  const sortedFirmTiers = Object.entries(analytics.firmTierFrequency || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sortedBarAdmissions = Object.entries(analytics.barAdmissionFrequency || {}).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  // Build practice area demand heatmap: practice area × location matrix
+  const practiceAreaDemand = buildPracticeAreaDemand();
+
+  // Build compensation summary: avg salary by practice area
+  const compensationSummary = buildCompensationSummary();
+
   return {
     totalAllTime: analytics.totalAllTime,
     today, thisWeek, thisMonth, thisYear,
@@ -199,9 +227,96 @@ function computeAnalyticsSummary() {
     topLocations: sortedLocations,
     topRejectionReasons: sortedRejections,
     topPracticeAreas: sortedPracticeAreas,
+    topFirmTiers: sortedFirmTiers,
+    topBarAdmissions: sortedBarAdmissions,
+    practiceAreaDemand,
+    compensationSummary,
     hourHistogram: analytics.hourHistogram,
     dayHistogram: analytics.dayHistogram,
   };
+}
+
+/**
+ * Build practice area demand heatmap: which practice areas appear most
+ * in which locations. Returns top combos as [{area, location, count}].
+ */
+function buildPracticeAreaDemand() {
+  const combos = {};
+  for (const candidate of (analytics.qualifiedCandidates || [])) {
+    const loc = candidate.location || "Unknown";
+    const titles = candidate.titles || "";
+    // Use location as the axis — practice areas come from practiceAreaFrequency
+    if (loc) {
+      combos[loc] = (combos[loc] || 0) + 1;
+    }
+  }
+
+  // Cross-reference: for each comp data point, track practice area + location
+  const areaLocCombos = {};
+  for (const entry of (analytics.compensationData || [])) {
+    if (entry.practiceArea && entry.location) {
+      const areas = entry.practiceArea.split(",").map((a) => a.trim());
+      for (const area of areas) {
+        if (!area || area === "Not specified") continue;
+        const key = `${area}|||${entry.location}`;
+        areaLocCombos[key] = (areaLocCombos[key] || 0) + 1;
+      }
+    }
+  }
+
+  // Also check qualified candidates for practice area data
+  // (compensation data may be sparse, so build from all screening data)
+  // Return top 10 combos
+  return Object.entries(areaLocCombos)
+    .map(([key, count]) => {
+      const [area, location] = key.split("|||");
+      return { area, location, count };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+}
+
+/**
+ * Build compensation summary: average salary ranges by practice area.
+ * Parses salary strings like "$120,000 - $160,000" into numeric midpoints.
+ */
+function buildCompensationSummary() {
+  const byArea = {};
+  for (const entry of (analytics.compensationData || [])) {
+    if (!entry.practiceArea || entry.practiceArea === "Not specified") continue;
+    if (!entry.salary || entry.salary === "Not enough data") continue;
+
+    const areas = entry.practiceArea.split(",").map((a) => a.trim());
+    const mid = parseSalaryMidpoint(entry.salary);
+    if (!mid) continue;
+
+    for (const area of areas) {
+      if (!area) continue;
+      if (!byArea[area]) byArea[area] = { total: 0, count: 0, samples: [] };
+      byArea[area].total += mid;
+      byArea[area].count++;
+      byArea[area].samples.push({ salary: entry.salary, location: entry.location, firmTier: entry.firmTier });
+    }
+  }
+
+  return Object.entries(byArea)
+    .map(([area, data]) => ({
+      area,
+      avgSalary: Math.round(data.total / data.count),
+      sampleCount: data.count,
+      topSample: data.samples[data.samples.length - 1], // most recent
+    }))
+    .sort((a, b) => b.avgSalary - a.avgSalary)
+    .slice(0, 8);
+}
+
+function parseSalaryMidpoint(salaryStr) {
+  const numbers = salaryStr.match(/[\d,]+/g);
+  if (!numbers || numbers.length === 0) return null;
+  const nums = numbers.map((n) => parseInt(n.replace(/,/g, ""), 10)).filter((n) => n > 10000);
+  if (nums.length === 0) return null;
+  if (nums.length === 1) return nums[0];
+  return Math.round((nums[0] + nums[1]) / 2);
 }
 
 function formatHour(h) {
@@ -281,7 +396,7 @@ function normalizeUrl(url) {
 function openCandidateTabs(urls, sender) {
   if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
 
-  // Filter out already-opened URLs
+  // Filter out already-opened URLs (persistent across restarts)
   const newUrls = [];
   for (const url of urls) {
     const norm = normalizeUrl(url);
@@ -290,6 +405,7 @@ function openCandidateTabs(urls, sender) {
       newUrls.push(url);
     }
   }
+  saveOpenedUrls();
 
   // Enforce hard cap
   const toOpen = newUrls.slice(0, MAX_TABS_PER_BATCH);
@@ -428,6 +544,50 @@ async function processScreeningQueue() {
           }
         }
 
+        // Track firm tier frequency
+        if (result.data.firmTier && result.data.firmTier !== "Unknown" && result.data.firmTier !== "Other") {
+          if (!analytics.firmTierFrequency) analytics.firmTierFrequency = {};
+          analytics.firmTierFrequency[result.data.firmTier] =
+            (analytics.firmTierFrequency[result.data.firmTier] || 0) + 1;
+        }
+
+        // Track bar admissions frequency
+        if (result.data.barAdmissions && result.data.barAdmissions !== "Not found") {
+          if (!analytics.barAdmissionFrequency) analytics.barAdmissionFrequency = {};
+          for (const state of result.data.barAdmissions.split(",").map((s) => s.trim())) {
+            if (state) analytics.barAdmissionFrequency[state] = (analytics.barAdmissionFrequency[state] || 0) + 1;
+          }
+        }
+
+        // Compensation intelligence: accumulate salary data points
+        if (result.data.salaryEstimate && result.data.salaryEstimate !== "Not enough data") {
+          if (!analytics.compensationData) analytics.compensationData = [];
+          analytics.compensationData.push({
+            practiceArea: result.data.practiceArea,
+            location: result.data.currentLocation,
+            salary: result.data.salaryEstimate,
+            firmTier: result.data.firmTier,
+            timestamp: Date.now(),
+          });
+          // Keep last 1000 data points
+          if (analytics.compensationData.length > 1000) {
+            analytics.compensationData = analytics.compensationData.slice(-1000);
+          }
+        }
+
+        // Candidate history: track for market movement detection
+        if (!analytics.candidateHistory) analytics.candidateHistory = {};
+        const historyKey = `${result.data.firstName}_${result.data.lastName}_${result.data.currentLocation}`.toLowerCase();
+        analytics.candidateHistory[historyKey] = {
+          firstName: result.data.firstName,
+          lastName: result.data.lastName,
+          currentJob: result.data.currentJob,
+          location: result.data.currentLocation,
+          practiceArea: result.data.practiceArea,
+          qualified: true,
+          timestamp: Date.now(),
+        };
+
         await pushToGoogleSheet(result.data);
 
         if (settings.desktopNotifications) {
@@ -517,11 +677,28 @@ If they are NOT a recruiter, evaluate them as a candidate using these STRICT rul
 5. US-BASED: Must be located in the United States.
 
 ADDITIONAL ANALYSIS (provide for ALL candidates, even rejected):
+
 - FIT SCORE: Rate 1-10 overall fit quality (10 = perfect candidate)
 - SALARY RANGE: Estimate annual salary range in USD based on title + location + experience level
 - PRACTICE AREA: Extract their legal specialty/practice area(s) (e.g., IP, Corporate, Litigation, Real Estate, Family Law, Immigration, Employment, Tax, Bankruptcy, etc.). If not in legal, say "Non-legal"
 - READY TO MOVE: Assess likelihood they'll actually move (High/Medium/Low) based on signals like recent profile updates, "open to work" badge, multiple job titles listed, etc.
 - PHYSICAL MOVE: Compare their current location to their preferred on-site location(s). If these are DIFFERENT cities/states, they are looking to physically relocate — flag as true.
+
+- BAR ADMISSIONS: Extract any state bar admissions mentioned in the profile (e.g., "NY", "CA", "TX"). Look in certifications, licenses, education, or profile text for phrases like "admitted in", "bar admission", "licensed in", "member of the bar". Return as comma-separated state abbreviations.
+
+- LATERAL MOVE ANALYSIS: Analyze their career trajectory through law firms:
+  * firmTier: Classify their CURRENT firm as "BigLaw/AmLaw100", "MidLaw", "SmallFirm/Boutique", "Government", "In-House", or "Other"
+  * careerTrajectory: Is their career path "Ascending" (moving to better/bigger firms), "Lateral" (similar tier), "Descending" (moving down), or "Mixed"?
+  * totalFirms: How many different law firms have they worked at?
+  * avgTenureYears: Average years at each employer (estimate)
+  * trajectoryNote: Brief 1-sentence summary of their career path (e.g., "Started at boutique, moved to BigLaw, now at AmLaw 50 firm — strong upward trajectory")
+
+- DATA CONFIDENCE: Rate 1-10 how confident you are in your analysis based on available data:
+  * 9-10: Full profile with detailed experience, education, clear practice area
+  * 6-8: Good profile but missing some details (dates, firm names unclear)
+  * 3-5: Sparse profile, had to make assumptions
+  * 1-2: Very little data, mostly guessing
+  Also note what key data is missing.
 
 PROFILE DATA:
 - Name: ${profile.name}
@@ -551,7 +728,15 @@ RESPOND WITH EXACTLY THIS JSON FORMAT AND NOTHING ELSE:
   "salaryEstimate": "e.g. '$120,000 - $160,000' or 'Not enough data'",
   "readyToMove": "High, Medium, or Low",
   "physicalMove": true or false,
-  "physicalMoveNote": "e.g. 'Currently in Chicago, looking for NYC roles' or empty string"
+  "physicalMoveNote": "e.g. 'Currently in Chicago, looking for NYC roles' or empty string",
+  "barAdmissions": "comma-separated state abbreviations, e.g. 'NY, CA, TX' or 'Not found'",
+  "firmTier": "BigLaw/AmLaw100, MidLaw, SmallFirm/Boutique, Government, In-House, or Other",
+  "careerTrajectory": "Ascending, Lateral, Descending, or Mixed",
+  "totalFirms": number,
+  "avgTenureYears": number,
+  "trajectoryNote": "1-sentence career path summary",
+  "dataConfidence": 1-10,
+  "dataConfidenceNote": "What data is missing or uncertain"
 }`;
 }
 
@@ -583,6 +768,14 @@ function parseScreeningResponse(content, profile) {
         readyToMove: parsed.readyToMove || "Unknown",
         physicalMove: parsed.physicalMove === true,
         physicalMoveNote: parsed.physicalMoveNote || "",
+        barAdmissions: parsed.barAdmissions || "Not found",
+        firmTier: parsed.firmTier || "Unknown",
+        careerTrajectory: parsed.careerTrajectory || "Unknown",
+        totalFirms: parsed.totalFirms || 0,
+        avgTenureYears: parsed.avgTenureYears || 0,
+        trajectoryNote: parsed.trajectoryNote || "",
+        dataConfidence: parsed.dataConfidence || 0,
+        dataConfidenceNote: parsed.dataConfidenceNote || "",
       },
     };
   } catch (err) {
@@ -656,6 +849,14 @@ async function pushToGoogleSheet(candidateData) {
       physicalMove: candidateData.physicalMove ? "YES - RELOCATING" : "No",
       physicalMoveNote: candidateData.physicalMoveNote,
       publicProfileUrl: candidateData.publicProfileUrl,
+      barAdmissions: candidateData.barAdmissions,
+      firmTier: candidateData.firmTier,
+      careerTrajectory: candidateData.careerTrajectory,
+      totalFirms: candidateData.totalFirms,
+      avgTenureYears: candidateData.avgTenureYears,
+      trajectoryNote: candidateData.trajectoryNote,
+      dataConfidence: candidateData.dataConfidence,
+      dataConfidenceNote: candidateData.dataConfidenceNote,
       timestamp: new Date().toISOString(),
     }),
   });
@@ -686,6 +887,9 @@ async function pushRejectedToSheet(candidateData, reason) {
         practiceArea: candidateData.practiceArea || "",
         onSiteLocationPreferred: candidateData.onSiteLocationPreferred || "",
         fitScore: candidateData.fitScore || 0,
+        barAdmissions: candidateData.barAdmissions || "",
+        firmTier: candidateData.firmTier || "",
+        dataConfidence: candidateData.dataConfidence || 0,
         rejectionReason: reason || "Unknown",
         timestamp: new Date().toISOString(),
       }),

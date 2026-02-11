@@ -23,6 +23,12 @@
  *    M1:  Physical Move?
  *    N1:  Relocation Note
  *    O1:  Public LinkedIn URL
+ *    P1:  Bar Admissions
+ *    Q1:  Firm Tier
+ *    R1:  Career Trajectory
+ *    S1:  Trajectory Note
+ *    T1:  Data Confidence
+ *    U1:  Confidence Note
  *
  * 4. Create a second tab called "Rejected"
  * 5. Add these headers in Row 1 of the "Rejected" tab:
@@ -36,7 +42,10 @@
  *    H1:  Public LinkedIn URL
  *    I1:  Practice Area
  *    J1:  Preferred On-Site Location
- *    K1:  Rejection Reason
+ *    K1:  Bar Admissions
+ *    L1:  Firm Tier
+ *    M1:  Data Confidence
+ *    N1:  Rejection Reason
  *
  * 6. Click Extensions > Apps Script
  * 7. Delete any existing code and paste this entire file
@@ -115,6 +124,12 @@ function handleAddCandidate(data) {
   sheet.getRange(2, 13).setValue(data.physicalMove || "");
   sheet.getRange(2, 14).setValue(data.physicalMoveNote || "");
   sheet.getRange(2, 15).setValue(data.publicProfileUrl || "");
+  sheet.getRange(2, 16).setValue(data.barAdmissions || "");
+  sheet.getRange(2, 17).setValue(data.firmTier || "");
+  sheet.getRange(2, 18).setValue(data.careerTrajectory || "");
+  sheet.getRange(2, 19).setValue(data.trajectoryNote || "");
+  sheet.getRange(2, 20).setValue(data.dataConfidence || "");
+  sheet.getRange(2, 21).setValue(data.dataConfidenceNote || "");
 
   // Highlight relocating candidates
   if (data.physicalMove === "YES - RELOCATING") {
@@ -129,6 +144,24 @@ function handleAddCandidate(data) {
     sheet.getRange(2, 2).setBackground("#fff2cc"); // yellow
   } else if (score > 0) {
     sheet.getRange(2, 2).setBackground("#f4cccc"); // red
+  }
+
+  // Color-code firm tier
+  var tier = (data.firmTier || "").toLowerCase();
+  if (tier.indexOf("biglaw") >= 0 || tier.indexOf("amlaw") >= 0) {
+    sheet.getRange(2, 17).setBackground("#d9ead3"); // green = BigLaw
+  } else if (tier.indexOf("midlaw") >= 0) {
+    sheet.getRange(2, 17).setBackground("#d9e2f3"); // light blue
+  }
+
+  // Color-code data confidence
+  var conf = parseInt(data.dataConfidence);
+  if (conf >= 8) {
+    sheet.getRange(2, 20).setBackground("#d9ead3"); // green = high confidence
+  } else if (conf >= 5) {
+    sheet.getRange(2, 20).setBackground("#fff2cc"); // yellow = moderate
+  } else if (conf > 0) {
+    sheet.getRange(2, 20).setBackground("#f4cccc"); // red = low confidence
   }
 
   return ContentService.createTextOutput(
@@ -155,7 +188,10 @@ function handleAddRejected(data) {
   sheet.getRange(2, 8).setValue(data.publicProfileUrl || "");
   sheet.getRange(2, 9).setValue(data.practiceArea || "");
   sheet.getRange(2, 10).setValue(data.onSiteLocationPreferred || "");
-  sheet.getRange(2, 11).setValue(data.rejectionReason || "");
+  sheet.getRange(2, 11).setValue(data.barAdmissions || "");
+  sheet.getRange(2, 12).setValue(data.firmTier || "");
+  sheet.getRange(2, 13).setValue(data.dataConfidence || "");
+  sheet.getRange(2, 14).setValue(data.rejectionReason || "");
 
   // Highlight when current location != preferred location (relocation signal)
   if (data.currentLocation && data.onSiteLocationPreferred
