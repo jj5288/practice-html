@@ -1,7 +1,32 @@
+/* Always-visible status bar — shows the extension is alive and scanning */
+#lnr-status-indicator {
+  position: fixed;
+  bottom: 8px;
+  right: 8px;
+  background: #1a1a2e;
+  color: #888;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  z-index: 999998;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2);
+  border: 1px solid #333;
+  cursor: default;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0.7;
+  transition: opacity 0.2s, border-color 0.3s;
+}
+#lnr-status-indicator:hover {
+  opacity: 1;
+}
+
+/* Notification detection indicator — pops up above the status bar */
 #lnr-detector-indicator {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 40px;
+  right: 8px;
   background: #1a1a2e;
   color: #e94560;
   padding: 8px 14px;

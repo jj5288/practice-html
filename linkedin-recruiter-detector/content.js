@@ -38,6 +38,7 @@
 
   let lastNotificationCount = 0;
   let isEnabled = true;
+  let pollCount = 0;
   // Track candidate URLs we've already opened to avoid duplicates
   let openedCandidateUrls = new Set();
 
@@ -46,12 +47,18 @@
    * Returns { found: boolean, count: number, element: Element|null }
    */
   function detectNotificationBadge() {
+    const debugInfo = [];
+
     for (const selector of CONFIG.BADGE_SELECTORS) {
       const elements = document.querySelectorAll(selector);
+      if (elements.length > 0) {
+        debugInfo.push(`${selector}: ${elements.length} match(es)`);
+      }
       for (const el of elements) {
         // Check if the element is visible
         const style = window.getComputedStyle(el);
         if (style.display === "none" || style.visibility === "hidden") {
+          debugInfo.push(`  ^ hidden (display:${style.display}, visibility:${style.visibility})`);
           continue;
         }
 
@@ -60,6 +67,7 @@
         const count = parseInt(text, 10);
 
         if (count > 0) {
+          console.log(`[LNR] FOUND badge via "${selector}" — count: ${count}, text: "${text}"`);
           return { found: true, count, element: el };
         }
 
@@ -67,9 +75,19 @@
         // red-ish background color which indicates an active notification
         const bgColor = style.backgroundColor;
         if (isRedish(bgColor)) {
+          console.log(`[LNR] FOUND red badge via "${selector}" — bg: ${bgColor}`);
           return { found: true, count: 1, element: el };
         }
+
+        if (text) {
+          debugInfo.push(`  ^ visible, text="${text}", bg=${bgColor}`);
+        }
       }
+    }
+
+    // Log debug info every 20 polls so the console isn't flooded
+    if (pollCount % 20 === 0 && debugInfo.length > 0) {
+      console.log("[LNR] Selector scan results:\n" + debugInfo.join("\n"));
     }
 
     // Fallback: scan for any small element with a red background that looks
@@ -202,11 +220,69 @@
   }
 
   /**
+   * One-time page diagnostic — logs what the extension can see so we can
+   * figure out the correct selectors if detection isn't working.
+   */
+  function runPageDiagnostic() {
+    console.log("[LNR] ═══════════════════════════════════════════");
+    console.log("[LNR] PAGE DIAGNOSTIC");
+    console.log("[LNR] URL:", window.location.href);
+    console.log("[LNR] Title:", document.title);
+
+    // Check for nav/header elements
+    const nav = document.querySelector("nav");
+    const header = document.querySelector("header");
+    console.log("[LNR] Has <nav>:", !!nav);
+    console.log("[LNR] Has <header>:", !!header);
+
+    // Look for anything bell/notification related
+    const bellKeywords = ["bell", "notif", "badge", "alert", "inbox", "messaging"];
+    const found = [];
+    for (const kw of bellKeywords) {
+      const matches = document.querySelectorAll(`[class*="${kw}"], [id*="${kw}"], [data-test*="${kw}"], [aria-label*="${kw}"]`);
+      if (matches.length > 0) {
+        for (const m of matches) {
+          const tag = m.tagName.toLowerCase();
+          const cls = (m.className || "").toString().substring(0, 100);
+          const txt = (m.textContent || "").trim().substring(0, 50);
+          const aria = m.getAttribute("aria-label") || "";
+          found.push(`  [${kw}] <${tag}> class="${cls}" text="${txt}" aria="${aria}"`);
+        }
+      }
+    }
+    if (found.length > 0) {
+      console.log("[LNR] Bell/notification elements found:\n" + found.join("\n"));
+    } else {
+      console.log("[LNR] WARNING: No bell/notification elements found on page!");
+    }
+
+    // Look for any element with red background in the nav area
+    const navEl = nav || header || document.body;
+    const redElements = [];
+    const allNavChildren = navEl.querySelectorAll("*");
+    for (const el of allNavChildren) {
+      const style = window.getComputedStyle(el);
+      if (isRedish(style.backgroundColor)) {
+        const rect = el.getBoundingClientRect();
+        redElements.push(`  <${el.tagName.toLowerCase()}> class="${(el.className || "").toString().substring(0, 80)}" size=${Math.round(rect.width)}x${Math.round(rect.height)} text="${(el.textContent || "").trim().substring(0, 30)}"`);
+      }
+    }
+    if (redElements.length > 0) {
+      console.log("[LNR] Red elements in nav/header:\n" + redElements.join("\n"));
+    } else {
+      console.log("[LNR] No red elements found in nav/header area.");
+    }
+
+    console.log("[LNR] ═══════════════════════════════════════════");
+  }
+
+  /**
    * Main polling loop. Checks for notification badges and notifies
    * the background script when changes are detected.
    */
   function poll() {
     if (!isEnabled) return;
+    pollCount++;
 
     const result = detectNotificationBadge();
 
@@ -241,6 +317,29 @@
   }
 
   /**
+   * Shows a persistent status indicator in the bottom-right corner
+   * so you always know the extension is running.
+   */
+  function showStatusIndicator() {
+    let status = document.getElementById("lnr-status-indicator");
+    if (!status) {
+      status = document.createElement("div");
+      status.id = "lnr-status-indicator";
+      document.body.appendChild(status);
+    }
+    status.textContent = "LNR Active — Scanning...";
+    status.style.display = "block";
+  }
+
+  function updateStatusIndicator(text, color) {
+    const status = document.getElementById("lnr-status-indicator");
+    if (status) {
+      status.textContent = text;
+      if (color) status.style.borderColor = color;
+    }
+  }
+
+  /**
    * Shows a small floating indicator that the extension detected notifications.
    */
   function showDetectionIndicator(count) {
@@ -250,8 +349,9 @@
       indicator.id = "lnr-detector-indicator";
       document.body.appendChild(indicator);
     }
-    indicator.textContent = `🔔 ${count} new`;
+    indicator.textContent = `New notifications: ${count}`;
     indicator.style.display = "block";
+    updateStatusIndicator(`LNR Active — ${count} notification${count !== 1 ? "s" : ""} detected`, "#4ecca3");
   }
 
   function removeDetectionIndicator() {
@@ -259,6 +359,7 @@
     if (indicator) {
       indicator.style.display = "none";
     }
+    updateStatusIndicator(`LNR Active — Scanning... (${pollCount} checks)`, "#888");
   }
 
   /**
@@ -328,11 +429,13 @@
   }
 
   // Start detection
+  showStatusIndicator();
+  runPageDiagnostic();
   setupMutationObserver();
   setupNotificationDropdownObserver();
   schedulePoll();
   // Run immediately on load
   poll();
 
-  console.log("[LinkedIn Recruiter Detector] Content script loaded.");
+  console.log("[LNR] Content script loaded and scanning on:", window.location.href);
 })();

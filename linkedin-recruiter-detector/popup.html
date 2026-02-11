@@ -201,6 +201,40 @@
       padding: 20px 0;
     }
 
+    /* ─── Help tab ─── */
+    .help-section {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .help-section h3 {
+      font-size: 12px;
+      color: #e94560;
+      margin-bottom: 6px;
+    }
+    .help-section p, .help-section li {
+      font-size: 12px;
+      color: #bbb;
+      line-height: 1.5;
+    }
+    .help-section ol, .help-section ul {
+      padding-left: 18px;
+      margin: 4px 0;
+    }
+    .help-section li { margin-bottom: 4px; }
+    .help-section .warn {
+      color: #e94560;
+      font-weight: 600;
+    }
+    .help-section code {
+      background: #1a1a2e;
+      color: #4ecca3;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+
     .footer {
       margin-top: 14px; text-align: center;
       font-size: 10px; color: #555;
@@ -214,8 +248,9 @@
   <!-- Tab bar -->
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-    <button class="tab-btn" data-tab="intelligence">Intelligence</button>
+    <button class="tab-btn" data-tab="intelligence">Intel</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
+    <button class="tab-btn" data-tab="help">Help</button>
   </div>
 
   <!-- ═══════ DASHBOARD TAB ═══════ -->
@@ -376,7 +411,56 @@
     </div>
   </div>
 
-  <div class="footer">v2.0 — Screens candidates via Kimi K2.5 AI</div>
+  <!-- ═══════ HELP TAB ═══════ -->
+  <div class="tab-content" id="tab-help">
+    <div class="help-section">
+      <h3>How to Run the Extension</h3>
+      <ol>
+        <li>Open Chrome and go to <strong>LinkedIn Recruiter</strong> (the URL must start with <code>linkedin.com/recruiter/</code> or <code>linkedin.com/talent/</code>)</li>
+        <li>Leave that tab <strong>open and loaded</strong></li>
+        <li>You should see a small <strong>"LNR Active"</strong> indicator in the bottom-right corner of the page</li>
+        <li>The extension checks for the red notification badge every 3-5 seconds</li>
+        <li>When a notification is detected, it will auto-open candidate profiles and screen them</li>
+      </ol>
+    </div>
+
+    <div class="help-section">
+      <h3>Requirements</h3>
+      <ul>
+        <li><span class="warn">Chrome must be open</span> — the extension runs inside your browser, not as a separate app</li>
+        <li><span class="warn">Laptop must be open</span> — closing the lid suspends Chrome and stops the extension</li>
+        <li>The LinkedIn Recruiter tab must be <strong>loaded</strong> (not sleeping). If Chrome put it to sleep, click the tab once to wake it up</li>
+        <li>The tab does NOT need to be in the foreground — you can use other tabs while it scans</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>Not Detecting Notifications?</h3>
+      <ol>
+        <li>Check for the <strong>"LNR Active — Scanning..."</strong> indicator at the bottom-right of the LinkedIn Recruiter page. If you don't see it, the extension is not loaded on that page.</li>
+        <li>Make sure your URL starts with <code>linkedin.com/recruiter/</code> or <code>linkedin.com/talent/</code>. Regular LinkedIn pages won't activate the extension.</li>
+        <li>Open the browser console (<code>F12</code> > Console tab) and look for messages starting with <code>[LNR]</code>. These tell you exactly what the extension sees.</li>
+        <li>Try clicking the notification bell manually to trigger a red badge, then watch the console for detection logs.</li>
+      </ol>
+    </div>
+
+    <div class="help-section">
+      <h3>Google Sheets Setup</h3>
+      <ol>
+        <li>Create a new Google Sheet with 15 column headers (A-O)</li>
+        <li>Go to <strong>Extensions > Apps Script</strong></li>
+        <li>Paste the Apps Script code and deploy as a Web App</li>
+        <li>Copy the Web App URL into the <strong>Settings</strong> tab above</li>
+      </ol>
+    </div>
+
+    <div class="help-section">
+      <h3>Troubleshooting</h3>
+      <p>If the extension shows "LNR Active" but never detects notifications, the notification badge HTML on your page may use different CSS classes. Open <code>F12</code> > Console, and look for the <strong>[LNR] PAGE DIAGNOSTIC</strong> section — it lists all notification-related elements on the page. Share this output so we can update the selectors.</p>
+    </div>
+  </div>
+
+  <div class="footer">v2.1 — Screens candidates via Kimi K2.5 AI</div>
 
   <script src="popup.js"></script>
 </body>
