@@ -35,7 +35,8 @@
  *    G1:  LinkedIn Recruiter Profile URL
  *    H1:  Public LinkedIn URL
  *    I1:  Practice Area
- *    J1:  Rejection Reason
+ *    J1:  Preferred On-Site Location
+ *    K1:  Rejection Reason
  *
  * 6. Click Extensions > Apps Script
  * 7. Delete any existing code and paste this entire file
@@ -153,7 +154,15 @@ function handleAddRejected(data) {
   sheet.getRange(2, 7).setValue(data.profileUrl || "");
   sheet.getRange(2, 8).setValue(data.publicProfileUrl || "");
   sheet.getRange(2, 9).setValue(data.practiceArea || "");
-  sheet.getRange(2, 10).setValue(data.rejectionReason || "");
+  sheet.getRange(2, 10).setValue(data.onSiteLocationPreferred || "");
+  sheet.getRange(2, 11).setValue(data.rejectionReason || "");
+
+  // Highlight when current location != preferred location (relocation signal)
+  if (data.currentLocation && data.onSiteLocationPreferred
+      && data.onSiteLocationPreferred !== "Not specified"
+      && data.currentLocation !== data.onSiteLocationPreferred) {
+    sheet.getRange(2, 10).setBackground("#fff2cc"); // yellow = mismatch = opportunity
+  }
 
   // Color-code fit score
   var score = parseInt(data.fitScore);

@@ -684,6 +684,7 @@ async function pushRejectedToSheet(candidateData, reason) {
         profileUrl: candidateData.profileUrl || "",
         publicProfileUrl: candidateData.publicProfileUrl || "",
         practiceArea: candidateData.practiceArea || "",
+        onSiteLocationPreferred: candidateData.onSiteLocationPreferred || "",
         fitScore: candidateData.fitScore || 0,
         rejectionReason: reason || "Unknown",
         timestamp: new Date().toISOString(),
