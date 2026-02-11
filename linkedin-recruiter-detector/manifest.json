@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Recruiter Notification Detector",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Detects LinkedIn Recruiter notifications, screens candidates via AI, and pushes qualified ones to Google Sheets.",
   "permissions": [
     "notifications",
@@ -12,6 +12,9 @@
     "https://www.linkedin.com/*",
     "https://linkedin.com/*",
     "https://integrate.api.nvidia.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://openrouter.ai/*",
     "https://script.google.com/*",
     "https://script.googleusercontent.com/*"
   ],
@@ -31,7 +34,11 @@
     {
       "matches": [
         "https://www.linkedin.com/talent/profile/*",
+        "https://www.linkedin.com/talent/hire/*",
+        "https://www.linkedin.com/talent/search/profile/*",
         "https://www.linkedin.com/recruiter/profile/*",
+        "https://www.linkedin.com/recruiter/hiring/*",
+        "https://www.linkedin.com/recruiter/search/*",
         "https://www.linkedin.com/in/*"
       ],
       "js": ["profile-scraper.js"],

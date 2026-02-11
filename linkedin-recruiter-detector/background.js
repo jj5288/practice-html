@@ -89,11 +89,26 @@ let currentCount = 0;
 let settings = { ...DEFAULT_SETTINGS };
 let screeningQueue = [];
 let isScreening = false;
-// Track which tabs were auto-opened by the extension
+// Track which tabs were auto-opened by the extension — PERSISTED to survive service worker restarts
 let autoOpenedTabIds = new Set();
 // Dedup: track URLs we've already opened (normalized) — persisted across restarts
 let openedUrls = new Set();
 const MAX_TABS_PER_BATCH = 50;
+
+// ─── Pipeline Diagnostics ─────────────────────────────────────────
+// These counters help debug where the pipeline breaks.
+const pipelineStats = {
+  notificationsDetected: 0,
+  candidateUrlsFound: 0,
+  tabsOpened: 0,
+  tabsOpenFailed: 0,
+  scrapeChecks: 0,
+  scrapeStarted: 0,
+  scrapeCompleted: 0,
+  llmCalls: 0,
+  llmErrors: 0,
+  llmFallbacks: 0,
+};
 
 // ─── Analytics Data Structure ───────────────────────────────────────
 
@@ -128,7 +143,7 @@ chrome.storage.sync.get("settings", (result) => {
   }
 });
 
-chrome.storage.local.get(["analytics", "openedUrls"], (result) => {
+chrome.storage.local.get(["analytics", "openedUrls", "autoOpenedTabIds"], (result) => {
   if (result.analytics) {
     analytics = { ...DEFAULT_ANALYTICS, ...result.analytics };
     if (!Array.isArray(analytics.notificationTimestamps)) analytics.notificationTimestamps = [];
@@ -149,6 +164,26 @@ chrome.storage.local.get(["analytics", "openedUrls"], (result) => {
     openedUrls = new Set(result.openedUrls);
     console.log(`[LNR Background] Restored ${openedUrls.size} dedup URLs from storage.`);
   }
+  // Restore auto-opened tab IDs (survives service worker restarts in MV3)
+  if (result.autoOpenedTabIds && Array.isArray(result.autoOpenedTabIds)) {
+    autoOpenedTabIds = new Set(result.autoOpenedTabIds);
+    console.log(`[LNR Background] Restored ${autoOpenedTabIds.size} auto-opened tab IDs from storage.`);
+    // Clean up: verify these tabs still exist
+    chrome.tabs.query({}, (tabs) => {
+      const existingIds = new Set(tabs.map((t) => t.id));
+      let removed = 0;
+      for (const id of autoOpenedTabIds) {
+        if (!existingIds.has(id)) {
+          autoOpenedTabIds.delete(id);
+          removed++;
+        }
+      }
+      if (removed > 0) {
+        console.log(`[LNR Background] Cleaned up ${removed} stale auto-opened tab IDs.`);
+        saveAutoOpenedTabIds();
+      }
+    });
+  }
 });
 
 function saveAnalytics() {
@@ -159,6 +194,10 @@ function saveOpenedUrls() {
   // Keep last 5000 URLs max to avoid storage bloat
   const urls = [...openedUrls].slice(-5000);
   chrome.storage.local.set({ openedUrls: urls });
+}
+
+function saveAutoOpenedTabIds() {
+  chrome.storage.local.set({ autoOpenedTabIds: [...autoOpenedTabIds] });
 }
 
 // ─── Message Handling ───────────────────────────────────────────────
@@ -176,12 +215,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PROFILE_SCRAPED") {
     handleProfileScraped(message, sender);
   }
-  if (message.type === "CHECK_AUTO_OPENED") {
-    // Profile scraper asks: "Was I auto-opened by the extension?"
+  if (message.type === "CHECK_AUTO_OPENED" || message.type === "CHECK_SHOULD_SCRAPE") {
+    // Profile scraper asks: "Should I scrape this page?"
     const tabId = sender && sender.tab ? sender.tab.id : null;
     const isAutoOpened = tabId ? autoOpenedTabIds.has(tabId) : false;
-    console.log(`[LNR Background] CHECK_AUTO_OPENED for tab ${tabId}: ${isAutoOpened}`);
-    sendResponse({ autoOpened: isAutoOpened });
+    pipelineStats.scrapeChecks++;
+    console.log(`[LNR Background] CHECK_SHOULD_SCRAPE for tab ${tabId}: autoOpened=${isAutoOpened}, autoScreen=${settings.autoScreenCandidates}`);
+    sendResponse({
+      autoOpened: isAutoOpened,
+      autoScreenEnabled: settings.autoScreenCandidates,
+    });
     return true;
   }
   if (message.type === "GET_SETTINGS") {
@@ -190,6 +233,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "GET_MODEL_PRESETS") {
     sendResponse({ presets: MODEL_PRESETS });
+    return true;
+  }
+  if (message.type === "GET_PIPELINE_STATS") {
+    sendResponse({ pipelineStats });
     return true;
   }
   if (message.type === "GET_ANALYTICS") {
@@ -396,6 +443,7 @@ function formatHour(h) {
 function handleNotificationDetected(message, sender) {
   const { count, candidateUrls, isNewNotification } = message;
   currentCount = count;
+  pipelineStats.notificationsDetected++;
 
   chrome.action.setBadgeText({ text: String(count) });
   chrome.action.setBadgeBackgroundColor({ color: "#e94560" });
@@ -485,18 +533,29 @@ function openCandidateTabs(urls, sender) {
   }
 
   console.log(`[LNR Background] Opening ${toOpen.length} tab(s).`);
+  pipelineStats.candidateUrlsFound += toOpen.length;
 
   const opened = [];
   for (const url of toOpen) {
-    // No longer need #lnr-auto hash — we track by tab ID instead
     chrome.tabs.create({ url, active: false }, (tab) => {
-      if (tab) autoOpenedTabIds.add(tab.id);
+      if (tab) {
+        autoOpenedTabIds.add(tab.id);
+        pipelineStats.tabsOpened++;
+        console.log(`[LNR Background] Tab ${tab.id} opened for: ${url.substring(0, 80)}...`);
+      } else {
+        pipelineStats.tabsOpenFailed++;
+        console.error(`[LNR Background] Failed to open tab for: ${url}`);
+      }
       opened.push(url);
-      if (opened.length === toOpen.length && sender && sender.tab) {
-        chrome.tabs.sendMessage(sender.tab.id, {
-          type: "TABS_OPENED",
-          urls: opened,
-        });
+      if (opened.length === toOpen.length) {
+        // Persist tab IDs so they survive service worker restarts
+        saveAutoOpenedTabIds();
+        if (sender && sender.tab) {
+          chrome.tabs.sendMessage(sender.tab.id, {
+            type: "TABS_OPENED",
+            urls: opened,
+          });
+        }
       }
     });
   }
@@ -515,7 +574,10 @@ function broadcastToContentScripts(message) {
 
 // Clean up auto-opened tab tracking when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
-  autoOpenedTabIds.delete(tabId);
+  if (autoOpenedTabIds.has(tabId)) {
+    autoOpenedTabIds.delete(tabId);
+    saveAutoOpenedTabIds();
+  }
 });
 
 // When an auto-opened tab finishes loading, send START_SCRAPE as a backup
@@ -532,7 +594,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // ─── Candidate Screening Pipeline ───────────────────────────────────
 
 function handleProfileScraped(message, sender) {
-  if (!settings.autoScreenCandidates) return;
+  pipelineStats.scrapeCompleted++;
+  console.log(`[LNR Background] PROFILE_SCRAPED received (total: ${pipelineStats.scrapeCompleted}). Name: ${message.profile?.name || "unknown"}, URL: ${message.url || "unknown"}`);
+
+  if (!settings.autoScreenCandidates) {
+    console.log("[LNR Background] Auto-screen is OFF — skipping screening.");
+    return;
+  }
 
   message.profile._scrapedAt = Date.now();
   screeningQueue.push(message.profile);
@@ -724,17 +792,62 @@ function getLlmConfig() {
   };
 }
 
+/**
+ * Screen a candidate with auto-fallback.
+ * If the primary model fails, automatically retries with DeepSeek R1 (NVIDIA).
+ */
 async function screenCandidate(profile) {
   const prompt = buildScreeningPrompt(profile);
-  const llm = getLlmConfig();
+  const primaryLlm = getLlmConfig();
 
-  if (!llm.apiKey) {
+  if (!primaryLlm.apiKey) {
     throw new Error("No API key configured. Go to Settings > AI Model to add one.");
   }
 
-  // Anthropic uses a different API format
+  // Try primary model first
+  try {
+    pipelineStats.llmCalls++;
+    console.log(`[LNR Background] Calling LLM: ${primaryLlm.modelId} ...`);
+    const result = await callLlm(prompt, profile, primaryLlm);
+    console.log(`[LNR Background] LLM response received. Qualified: ${result.qualified}, Fit: ${result.data.fitScore}`);
+    return result;
+  } catch (primaryError) {
+    pipelineStats.llmErrors++;
+    console.error(`[LNR Background] Primary LLM failed (${primaryLlm.modelId}):`, primaryError.message);
+
+    // Auto-fallback to DeepSeek R1 if it's a different model
+    const fallbackPreset = MODEL_PRESETS["deepseek-r1"];
+    if (primaryLlm.modelId !== fallbackPreset.modelId) {
+      console.log(`[LNR Background] Falling back to ${fallbackPreset.modelId}...`);
+      pipelineStats.llmFallbacks++;
+      try {
+        pipelineStats.llmCalls++;
+        const fallbackLlm = {
+          apiUrl: fallbackPreset.apiUrl,
+          modelId: fallbackPreset.modelId,
+          provider: fallbackPreset.provider,
+          apiKey: primaryLlm.apiKey, // Use same API key (NVIDIA key works for all NVIDIA models)
+        };
+        const result = await callLlm(prompt, profile, fallbackLlm);
+        console.log(`[LNR Background] Fallback LLM succeeded. Qualified: ${result.qualified}, Fit: ${result.data.fitScore}`);
+        return result;
+      } catch (fallbackError) {
+        pipelineStats.llmErrors++;
+        console.error(`[LNR Background] Fallback LLM also failed:`, fallbackError.message);
+        throw new Error(`Both primary (${primaryLlm.modelId}) and fallback (${fallbackPreset.modelId}) failed. Primary: ${primaryError.message}. Fallback: ${fallbackError.message}`);
+      }
+    }
+
+    throw primaryError; // No fallback available (already using DeepSeek)
+  }
+}
+
+/**
+ * Call an LLM with the given config. Returns parsed screening response.
+ */
+async function callLlm(prompt, profile, llm) {
   if (llm.provider === "anthropic") {
-    return screenCandidateAnthropic(prompt, profile, llm);
+    return callLlmAnthropic(prompt, profile, llm);
   }
 
   // OpenAI-compatible format (NVIDIA, OpenAI, OpenRouter, etc.)
@@ -757,18 +870,21 @@ async function screenCandidate(profile) {
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
-    throw new Error(`LLM API error (${llm.modelId}): ${response.status} ${response.statusText} ${errText}`);
+    throw new Error(`${response.status} ${response.statusText} ${errText.substring(0, 200)}`);
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || "";
+  if (!content) {
+    throw new Error("Empty response from LLM");
+  }
   return parseScreeningResponse(content, profile);
 }
 
 /**
  * Anthropic uses a different request/response format.
  */
-async function screenCandidateAnthropic(prompt, profile, llm) {
+async function callLlmAnthropic(prompt, profile, llm) {
   const response = await fetch(llm.apiUrl, {
     method: "POST",
     headers: {

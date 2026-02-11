@@ -1,42 +1,83 @@
 /**
- * Profile Scraper - runs on LinkedIn Recruiter profile pages.
+ * Profile Scraper - runs on LinkedIn Recruiter/Talent profile pages.
  *
- * SAFETY: Only scrapes when the background script confirms this tab
- * was auto-opened by the extension. Respects robots meta tags.
- * Uses randomized delays.
+ * ACTIVATION MODES:
+ *  1. Auto-opened tabs: Background confirms via CHECK_AUTO_OPENED → scrapes immediately
+ *  2. Any profile page: If user has auto-screen ON, scrapes ALL profile pages
+ *     (This ensures screening works even if tab-ID tracking fails)
+ *  3. Backup: Background sends START_SCRAPE after tab loads
  *
- * Extracts candidate data from the profile and sends it to the
- * background script for screening via the Kimi K2.5 LLM.
+ * SAFETY: Respects robots meta tags. Uses randomized delays.
  */
 
 (function () {
   "use strict";
 
   let hasScraped = false;
+  let isAutoOpened = false;
 
-  // ─── Ask background if we should scrape this tab ──────────────────
-  // The background tracks which tab IDs it auto-opened.
-  // This is more reliable than URL hash which can get stripped.
-  chrome.runtime.sendMessage({ type: "CHECK_AUTO_OPENED" }, (response) => {
+  console.log("[LNR Scraper] Profile scraper loaded on:", window.location.href);
+
+  // ─── Check if this is a candidate profile page ──────────────────
+  // Skip pages that are clearly NOT individual profiles
+  function isProfilePage() {
+    const url = window.location.href;
+    // Positive signals: URL contains profile-related paths
+    if (url.includes("/profile/") || url.includes("/in/") || url.includes("/hire/")) {
+      return true;
+    }
+    // For /recruiter/ and /talent/ URLs, check if the page has profile content
+    // (search results pages also match these patterns)
+    if (url.includes("/search")) return false;
+    if (url.includes("/pipeline")) return false;
+    if (url.includes("/projects")) return false;
+    if (url.includes("/settings")) return false;
+    if (url.includes("/reporting")) return false;
+    if (url.includes("/admin")) return false;
+    // If it's a /talent/ or /recruiter/ URL with an ID-like segment, probably a profile
+    const pathParts = new URL(url).pathname.split("/").filter(Boolean);
+    if (pathParts.length >= 3) return true; // e.g., /talent/hire/12345 or /recruiter/profile/ABC
+    return false;
+  }
+
+  if (!isProfilePage()) {
+    console.log("[LNR Scraper] Not a profile page — skipping.");
+    return;
+  }
+
+  // ─── Ask background: is this tab auto-opened AND is auto-screen on? ─
+  chrome.runtime.sendMessage({ type: "CHECK_SHOULD_SCRAPE" }, (response) => {
     if (chrome.runtime.lastError) {
       console.log("[LNR Scraper] Could not reach background:", chrome.runtime.lastError.message);
       return;
     }
 
-    if (response && response.autoOpened) {
-      console.log("[LNR Scraper] Background confirmed auto-opened tab — will scrape.");
+    if (!response) {
+      console.log("[LNR Scraper] No response from background.");
+      return;
+    }
+
+    console.log("[LNR Scraper] Background response:", JSON.stringify(response));
+
+    if (response.autoOpened) {
+      // Tab was auto-opened by the extension — always scrape
+      isAutoOpened = true;
+      console.log("[LNR Scraper] Auto-opened tab confirmed — will scrape.");
+      setTimeout(scrapeProfile, randomDelay(2000, 4500));
+    } else if (response.autoScreenEnabled) {
+      // Auto-screen is ON — scrape all profile pages (catches manual browsing too)
+      console.log("[LNR Scraper] Auto-screen enabled — will scrape this profile.");
       setTimeout(scrapeProfile, randomDelay(2000, 4500));
     } else {
-      console.log("[LNR Scraper] Not auto-opened — skipping scrape.");
+      console.log("[LNR Scraper] Auto-screen disabled and not auto-opened — skipping.");
     }
   });
 
-  // Also listen for a direct START_SCRAPE message from background
-  // (backup trigger in case the CHECK_AUTO_OPENED races with tab creation)
+  // Backup: listen for START_SCRAPE from background
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "START_SCRAPE" && !hasScraped) {
       console.log("[LNR Scraper] Received START_SCRAPE from background.");
-      setTimeout(scrapeProfile, randomDelay(2000, 4500));
+      setTimeout(scrapeProfile, randomDelay(1000, 2500));
     }
   });
 
@@ -52,14 +93,13 @@
     return true;
   }
 
-  // ─── Randomized delay helper ──────────────────────────────────────
   function randomDelay(minMs, maxMs) {
     return Math.floor(Math.random() * (maxMs - minMs)) + minMs;
   }
 
   // Wait for the profile to fully load before scraping
   let scrapeAttempts = 0;
-  const MAX_ATTEMPTS = 15;
+  const MAX_ATTEMPTS = 20; // Increased from 15 — give LinkedIn more time to render
 
   function scrapeProfile() {
     if (hasScraped) return;
@@ -73,10 +113,10 @@
     // Gather all visible text from the profile page
     const profileData = extractProfileData();
 
-    if (!profileData.rawText || profileData.rawText.length < 100) {
+    if (!profileData.rawText || profileData.rawText.length < 50) {
       // Page likely hasn't loaded yet
       if (scrapeAttempts < MAX_ATTEMPTS) {
-        console.log(`[LNR Scraper] Page not ready (attempt ${scrapeAttempts}/${MAX_ATTEMPTS}), retrying...`);
+        console.log(`[LNR Scraper] Page not ready (attempt ${scrapeAttempts}/${MAX_ATTEMPTS}, text length: ${(profileData.rawText || "").length}), retrying...`);
         setTimeout(scrapeProfile, randomDelay(1500, 3500));
         return;
       }
@@ -84,20 +124,21 @@
     }
 
     hasScraped = true;
-    console.log("[LNR Scraper] Scraped profile data:", profileData.name, profileData.headline);
+    console.log("[LNR Scraper] Scraped profile:", profileData.name || "(no name)", "|", profileData.headline || "(no headline)", "| text length:", profileData.rawText.length);
 
     // Send to background for LLM screening
     chrome.runtime.sendMessage({
       type: "PROFILE_SCRAPED",
       profile: profileData,
       url: window.location.href,
+      isAutoOpened: isAutoOpened,
       timestamp: Date.now(),
     });
   }
 
   /**
    * Extracts structured data from a LinkedIn Recruiter profile page.
-   * Uses multiple selector strategies since LinkedIn's DOM varies.
+   * Uses multiple selector strategies since LinkedIn's DOM varies by page type.
    */
   function extractProfileData() {
     const data = {
@@ -121,6 +162,8 @@
       '[class*="artdeco-entity-lockup__title"]',
       ".profile-topcard-person-entity__name",
       ".top-card__full-name",
+      '[class*="topcard"] [class*="name"]',
+      '[class*="profile-top"] h1',
     ];
     for (const sel of nameSelectors) {
       const el = document.querySelector(sel);
@@ -137,6 +180,8 @@
       '[class*="artdeco-entity-lockup__subtitle"]',
       ".profile-topcard__current-positions",
       ".top-card__headline",
+      '[class*="topcard"] [class*="headline"]',
+      '[class*="topcard"] [class*="position"]',
       "h2",
     ];
     for (const sel of headlineSelectors) {
@@ -153,6 +198,7 @@
       '[class*="location"]',
       '[class*="topcard__location"]',
       '[data-test-profile-location]',
+      '[class*="topcard"] [class*="geo"]',
     ];
     for (const sel of locationSelectors) {
       const el = document.querySelector(sel);
@@ -163,25 +209,39 @@
     }
 
     // --- Experience section ---
-    const expSections = document.querySelectorAll(
-      '[class*="experience"] li, [class*="position"] li, [id*="experience"] li'
-    );
-    for (const item of expSections) {
-      const text = item.textContent.trim().replace(/\s+/g, " ");
-      if (text.length > 10) {
-        data.experience.push(text);
+    const expSelectors = [
+      '[class*="experience"] li',
+      '[class*="position"] li',
+      '[id*="experience"] li',
+      '[class*="experience-section"] li',
+      '[data-section="experience"] li',
+    ];
+    for (const selector of expSelectors) {
+      const items = document.querySelectorAll(selector);
+      for (const item of items) {
+        const text = item.textContent.trim().replace(/\s+/g, " ");
+        if (text.length > 10) {
+          data.experience.push(text);
+        }
       }
+      if (data.experience.length > 0) break;
     }
 
     // --- Education section ---
-    const eduSections = document.querySelectorAll(
-      '[class*="education"] li, [id*="education"] li'
-    );
-    for (const item of eduSections) {
-      const text = item.textContent.trim().replace(/\s+/g, " ");
-      if (text.length > 10) {
-        data.education.push(text);
+    const eduSelectors = [
+      '[class*="education"] li',
+      '[id*="education"] li',
+      '[data-section="education"] li',
+    ];
+    for (const selector of eduSelectors) {
+      const items = document.querySelectorAll(selector);
+      for (const item of items) {
+        const text = item.textContent.trim().replace(/\s+/g, " ");
+        if (text.length > 10) {
+          data.education.push(text);
+        }
       }
+      if (data.education.length > 0) break;
     }
 
     // --- Open to work info ---
@@ -190,6 +250,7 @@
       '[class*="openToWork"]',
       '[class*="spotlight"]',
       '[class*="hiring-preference"]',
+      '[class*="open-to"]',
     ];
     for (const sel of otwSelectors) {
       const el = document.querySelector(sel);
@@ -223,11 +284,10 @@
     const mainContent =
       document.querySelector('[class*="profile"]') ||
       document.querySelector("main") ||
+      document.querySelector('[role="main"]') ||
       document.body;
     data.rawText = mainContent.innerText.substring(0, 8000);
 
     return data;
   }
-
-  console.log("[LNR Scraper] Profile scraper loaded, checking with background...");
 })();

@@ -583,9 +583,15 @@
       <h3>Troubleshooting</h3>
       <p>If the extension shows "LNR Active" but never detects notifications, the notification badge HTML on your page may use different CSS classes. Open <code>F12</code> > Console, and look for the <strong>[LNR] PAGE DIAGNOSTIC</strong> section — it lists all notification-related elements on the page. Share this output so we can update the selectors.</p>
     </div>
+
+    <div class="help-section">
+      <h3>Pipeline Diagnostic</h3>
+      <p style="font-size:11px;color:#888;margin-bottom:6px;">Shows where data flows — helps identify breaks in the pipeline. Resets when Chrome restarts.</p>
+      <div id="pipelineDiag" style="font-size:11px;color:#aaa;font-family:monospace;line-height:1.6;">Loading...</div>
+    </div>
   </div>
 
-  <div class="footer">v2.3 — Screens candidates via Kimi K2.5 AI</div>
+  <div class="footer">v2.4 — AI screening with auto-fallback</div>
 
   <script src="popup.js"></script>
 </body>

@@ -158,35 +158,43 @@
     const urls = [];
     const seen = new Set();
 
-    // Strategy 1: Find links containing "View Candidate" text
-    const allLinks = document.querySelectorAll("a");
+    // Strategy 1: Find any links to candidate/profile pages in notification areas
+    // LinkedIn Recruiter uses various text: "View Candidate", "View profile", or just the name as a link
+    const allLinks = document.querySelectorAll("a[href]");
     for (const link of allLinks) {
-      const text = (link.textContent || "").trim().toLowerCase();
-      if (!text.includes("view candidate")) continue;
-      if (!link.href) continue;
+      const href = link.href || "";
+      // Must be a LinkedIn profile-type URL
+      if (!href.includes("/profile/") && !href.includes("/in/") && !href.includes("/hire/") && !href.includes("/talent/")) continue;
+      // Skip navigation and non-candidate links
+      if (href.includes("/settings") || href.includes("/search?") || href.includes("/reporting")) continue;
 
-      // Normalize URL (strip hash/query variations for dedup)
-      const normalizedUrl = normalizeUrl(link.href);
+      const normalizedUrl = normalizeUrl(href);
       if (openedCandidateUrls.has(normalizedUrl)) continue;
       if (seen.has(normalizedUrl)) continue;
 
       // Skip "Recommended matches" notifications
       if (isSkippableNotification(link)) {
-        console.log("[LNR] Skipping recommended match:", link.href);
+        console.log("[LNR] Skipping recommended match:", href);
         continue;
       }
 
       seen.add(normalizedUrl);
-      urls.push(link.href);
+      urls.push(href);
 
       if (urls.length >= CONFIG.MAX_TABS_PER_CYCLE) break;
     }
 
-    // Strategy 2: Look inside notification items for profile links
+    // Strategy 2: Look inside notification items with broader selectors
     if (urls.length < CONFIG.MAX_TABS_PER_CYCLE) {
       const notifSelectors = [
         '[class*="notification"] a[href*="/profile/"]',
         '[class*="notification"] a[href*="/talent/"]',
+        '[class*="notification"] a[href*="/hire/"]',
+        '[class*="notification"] a[href*="/in/"]',
+        '[class*="alert"] a[href*="/profile/"]',
+        '[class*="alert"] a[href*="/talent/"]',
+        '[class*="update"] a[href*="/profile/"]',
+        '[class*="update"] a[href*="/talent/"]',
       ];
       for (const selector of notifSelectors) {
         const links = document.querySelectorAll(selector);
@@ -206,6 +214,7 @@
       }
     }
 
+    console.log(`[LNR] extractCandidateLinks found ${urls.length} URL(s)`);
     return urls;
   }
 
@@ -425,7 +434,10 @@
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "SET_ENABLED") {
       isEnabled = message.enabled;
-      if (!isEnabled) removeDetectionIndicator();
+      if (!isEnabled) {
+        const status = document.getElementById("lnr-status-indicator");
+        if (status) status.style.display = "none";
+      }
     }
     if (message.type === "GET_STATUS") {
       chrome.runtime.sendMessage({
