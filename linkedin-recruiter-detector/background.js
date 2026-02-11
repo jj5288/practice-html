@@ -13,6 +13,8 @@ const DEFAULT_SETTINGS = {
   desktopNotifications: true,
   autoOpenCandidates: true,
   autoScreenCandidates: true,
+  acceptAll: false,        // When true, skip rejection rules — accept all candidates
+  logRejected: true,       // When true, push rejected candidates to "Rejected" sheet tab
   sheetsWebhookUrl: "",
   soundAlert: false,
 };
@@ -140,7 +142,12 @@ function computeAnalyticsSummary() {
   const oneMonth = 30 * 86400000;
   const oneYear = 365 * 86400000;
 
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const todayMs = startOfToday.getTime();
+
   const timestamps = analytics.notificationTimestamps;
+  const today = timestamps.filter((t) => t >= todayMs).length;
   const thisWeek = timestamps.filter((t) => now - t < oneWeek).length;
   const thisMonth = timestamps.filter((t) => now - t < oneMonth).length;
   const thisYear = timestamps.filter((t) => now - t < oneYear).length;
@@ -179,7 +186,7 @@ function computeAnalyticsSummary() {
 
   return {
     totalAllTime: analytics.totalAllTime,
-    thisWeek, thisMonth, thisYear,
+    today, thisWeek, thisMonth, thisYear,
     totalScreened: analytics.totalScreened,
     totalQualified: analytics.totalQualified,
     totalRejected: analytics.totalRejected,
@@ -384,7 +391,10 @@ async function processScreeningQueue() {
         continue; // Don't push recruiters to the candidate sheet
       }
 
-      if (result.qualified) {
+      // In "accept all" mode, override rejection — treat everyone as qualified
+      const isQualified = settings.acceptAll ? true : result.qualified;
+
+      if (isQualified) {
         analytics.totalQualified++;
 
         const responseTimeMs = profile._scrapedAt ? Date.now() - profile._scrapedAt : 0;
@@ -435,6 +445,11 @@ async function processScreeningQueue() {
         const category = categorizeRejection(result.reason);
         analytics.rejectionReasons[category] = (analytics.rejectionReasons[category] || 0) + 1;
         console.log(`[LNR Detector] Candidate rejected: ${result.reason}`);
+
+        // Push rejected candidates to "Rejected" sheet tab if enabled
+        if (settings.logRejected !== false) {
+          await pushRejectedToSheet(result.data, result.reason);
+        }
       }
 
       saveAnalytics();
@@ -650,4 +665,32 @@ async function pushToGoogleSheet(candidateData) {
   }
 
   console.log("[LNR Detector] Candidate pushed to Google Sheet.");
+}
+
+async function pushRejectedToSheet(candidateData, reason) {
+  const webhookUrl = settings.sheetsWebhookUrl;
+  if (!webhookUrl) return;
+
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add_rejected",
+        firstName: candidateData.firstName || "",
+        lastName: candidateData.lastName || "",
+        currentJob: candidateData.currentJob || "",
+        currentLocation: candidateData.currentLocation || "",
+        profileUrl: candidateData.profileUrl || "",
+        publicProfileUrl: candidateData.publicProfileUrl || "",
+        practiceArea: candidateData.practiceArea || "",
+        fitScore: candidateData.fitScore || 0,
+        rejectionReason: reason || "Unknown",
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    console.log("[LNR Detector] Rejected candidate logged to sheet.");
+  } catch (err) {
+    console.error("[LNR Detector] Failed to log rejected candidate:", err);
+  }
 }

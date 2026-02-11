@@ -6,7 +6,8 @@
  * SETUP INSTRUCTIONS:
  *
  * 1. Create a new Google Sheet
- * 2. Add these headers in Row 1:
+ * 2. Rename the first tab to "Qualified"
+ * 3. Add these headers in Row 1 of the "Qualified" tab:
  *    A1:  Timestamp
  *    B1:  Fit Score
  *    C1:  First Name
@@ -23,14 +24,27 @@
  *    N1:  Relocation Note
  *    O1:  Public LinkedIn URL
  *
- * 3. Click Extensions > Apps Script
- * 4. Delete any existing code and paste this entire file
- * 5. Click Deploy > New deployment
- * 6. Choose "Web app" as the type
- * 7. Set "Execute as" to "Me"
- * 8. Set "Who has access" to "Anyone"
- * 9. Click Deploy and authorize when prompted
- * 10. Copy the Web app URL — paste it into the extension popup
+ * 4. Create a second tab called "Rejected"
+ * 5. Add these headers in Row 1 of the "Rejected" tab:
+ *    A1:  Timestamp
+ *    B1:  Fit Score
+ *    C1:  First Name
+ *    D1:  Last Name
+ *    E1:  Current Job
+ *    F1:  Current Location
+ *    G1:  LinkedIn Recruiter Profile URL
+ *    H1:  Public LinkedIn URL
+ *    I1:  Practice Area
+ *    J1:  Rejection Reason
+ *
+ * 6. Click Extensions > Apps Script
+ * 7. Delete any existing code and paste this entire file
+ * 8. Click Deploy > New deployment
+ * 9. Choose "Web app" as the type
+ * 10. Set "Execute as" to "Me"
+ * 11. Set "Who has access" to "Anyone"
+ * 12. Click Deploy and authorize when prompted
+ * 13. Copy the Web app URL — paste it into the extension popup
  *
  * NOTE: If you already deployed a previous version, click
  *       Deploy > Manage deployments > Edit (pencil icon) >
@@ -51,8 +65,11 @@ function doPost(e) {
     if (data.action === "recruiter_alert") {
       return handleRecruiterAlert(data);
     }
+    if (data.action === "add_rejected") {
+      return handleAddRejected(data);
+    }
 
-    // Default: add candidate to sheet
+    // Default: add qualified candidate to sheet
     return handleAddCandidate(data);
   } catch (err) {
     return ContentService.createTextOutput(
@@ -62,11 +79,23 @@ function doPost(e) {
 }
 
 /**
- * Adds a qualified candidate to the spreadsheet.
+ * Gets or creates a sheet tab by name.
+ */
+function getOrCreateSheet(name) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  return sheet;
+}
+
+/**
+ * Adds a qualified candidate to the "Qualified" tab.
  * Inserts at Row 2 so newest candidates are always at the top.
  */
 function handleAddCandidate(data) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sheet = getOrCreateSheet("Qualified");
 
   sheet.insertRowAfter(1);
 
@@ -103,6 +132,41 @@ function handleAddCandidate(data) {
 
   return ContentService.createTextOutput(
     JSON.stringify({ status: "success" })
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Adds a rejected candidate to the "Rejected" tab.
+ * Inserts at Row 2 so newest are always at the top.
+ */
+function handleAddRejected(data) {
+  var sheet = getOrCreateSheet("Rejected");
+
+  sheet.insertRowAfter(1);
+
+  sheet.getRange(2, 1).setValue(data.timestamp || new Date().toISOString());
+  sheet.getRange(2, 2).setValue(data.fitScore || "");
+  sheet.getRange(2, 3).setValue(data.firstName || "");
+  sheet.getRange(2, 4).setValue(data.lastName || "");
+  sheet.getRange(2, 5).setValue(data.currentJob || "");
+  sheet.getRange(2, 6).setValue(data.currentLocation || "");
+  sheet.getRange(2, 7).setValue(data.profileUrl || "");
+  sheet.getRange(2, 8).setValue(data.publicProfileUrl || "");
+  sheet.getRange(2, 9).setValue(data.practiceArea || "");
+  sheet.getRange(2, 10).setValue(data.rejectionReason || "");
+
+  // Color-code fit score
+  var score = parseInt(data.fitScore);
+  if (score >= 8) {
+    sheet.getRange(2, 2).setBackground("#d9ead3");
+  } else if (score >= 5) {
+    sheet.getRange(2, 2).setBackground("#fff2cc");
+  } else if (score > 0) {
+    sheet.getRange(2, 2).setBackground("#f4cccc");
+  }
+
+  return ContentService.createTextOutput(
+    JSON.stringify({ status: "success", tab: "Rejected" })
   ).setMimeType(ContentService.MimeType.JSON);
 }
 

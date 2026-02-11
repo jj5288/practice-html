@@ -196,6 +196,10 @@
     .reset-btn:hover { background: #e94560; color: #fff; }
     .save-msg { font-size: 11px; color: #4ecca3; display: none; }
 
+    /* Clickable stat card */
+    .stat-card.clickable { cursor: pointer; transition: border 0.2s; border: 1px solid transparent; }
+    .stat-card.clickable:hover { border: 1px solid #4ecca3; }
+
     .empty-state {
       text-align: center; color: #555; font-size: 12px;
       padding: 20px 0;
@@ -255,10 +259,11 @@
 
   <!-- ═══════ DASHBOARD TAB ═══════ -->
   <div class="tab-content active" id="tab-dashboard">
+    <!-- Notification counts -->
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-value" id="statCurrent">--</div>
-        <div class="stat-label">Right Now</div>
+        <div class="stat-value" id="statToday">--</div>
+        <div class="stat-label" id="statTodayLabel">Today</div>
       </div>
       <div class="stat-card">
         <div class="stat-value" id="statWeek">--</div>
@@ -274,19 +279,23 @@
       </div>
       <div class="stat-card wide">
         <div class="stat-value" id="statAllTime">--</div>
-        <div class="stat-label">All Time</div>
+        <div class="stat-label">All Time Notifications</div>
       </div>
     </div>
 
-    <!-- Screening stats -->
+    <!-- Screening pipeline stats -->
     <div class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card wide">
+        <div class="stat-value green" id="statScanned">--</div>
+        <div class="stat-label">Profiles Scanned (All Time)</div>
+      </div>
+      <div class="stat-card clickable" id="qualifiedCard" title="Click to open Google Sheet">
         <div class="stat-value green" id="statQualified">--</div>
-        <div class="stat-label">Qualified</div>
+        <div class="stat-label">Qualified (All Time)</div>
       </div>
       <div class="stat-card">
         <div class="stat-value" id="statRejected">--</div>
-        <div class="stat-label">Rejected</div>
+        <div class="stat-label">Rejected (All Time)</div>
       </div>
       <div class="stat-card">
         <div class="stat-value green" id="statQualRate">--%</div>
@@ -394,6 +403,20 @@
         <span class="toggle-slider"></span>
       </label>
     </div>
+    <div class="setting-row">
+      <span class="setting-label">Accept all (disable rejection rules)</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleAcceptAll">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">Log rejected to Google Sheet</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleLogRejected" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
 
     <div class="section-label">Google Sheets</div>
     <div class="url-input-group">
@@ -460,7 +483,7 @@
     </div>
   </div>
 
-  <div class="footer">v2.1 — Screens candidates via Kimi K2.5 AI</div>
+  <div class="footer">v2.2 — Screens candidates via Kimi K2.5 AI</div>
 
   <script src="popup.js"></script>
 </body>

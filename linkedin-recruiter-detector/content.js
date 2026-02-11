@@ -362,8 +362,6 @@
       if (isNewNotification && candidateUrls.length > 0) {
         sendCandidateUrls(candidateUrls);
       }
-
-      showDetectionIndicator(result.count);
     } else if (!result.found && lastNotificationCount > 0) {
       lastNotificationCount = 0;
       chrome.runtime.sendMessage({
@@ -371,7 +369,6 @@
         url: window.location.href,
         timestamp: Date.now(),
       });
-      removeDetectionIndicator();
     }
   }
 
@@ -384,36 +381,8 @@
       status.id = "lnr-status-indicator";
       document.body.appendChild(status);
     }
-    status.textContent = "LNR Active — Scanning...";
+    status.textContent = "LNR Active";
     status.style.display = "block";
-  }
-
-  function updateStatusIndicator(text, color) {
-    const status = document.getElementById("lnr-status-indicator");
-    if (status) {
-      status.textContent = text;
-      if (color) status.style.borderColor = color;
-    }
-  }
-
-  function showDetectionIndicator(count) {
-    let indicator = document.getElementById("lnr-detector-indicator");
-    if (!indicator) {
-      indicator = document.createElement("div");
-      indicator.id = "lnr-detector-indicator";
-      document.body.appendChild(indicator);
-    }
-    indicator.textContent = `New notifications: ${count}`;
-    indicator.style.display = "block";
-    updateStatusIndicator(`LNR Active — ${count} notification${count !== 1 ? "s" : ""} detected`, "#4ecca3");
-  }
-
-  function removeDetectionIndicator() {
-    const indicator = document.getElementById("lnr-detector-indicator");
-    if (indicator) {
-      indicator.style.display = "none";
-    }
-    updateStatusIndicator(`LNR Active — Scanning... (${pollCount} checks)`, "#888");
   }
 
   // ─── MutationObserver (THROTTLED) ─────────────────────────────────

@@ -20,10 +20,25 @@ const toggleEnabled = document.getElementById("toggleEnabled");
 const toggleDesktop = document.getElementById("toggleDesktop");
 const toggleAutoOpen = document.getElementById("toggleAutoOpen");
 const toggleAutoScreen = document.getElementById("toggleAutoScreen");
+const toggleAcceptAll = document.getElementById("toggleAcceptAll");
+const toggleLogRejected = document.getElementById("toggleLogRejected");
 const sheetsUrlInput = document.getElementById("sheetsUrl");
 const saveSheetUrlBtn = document.getElementById("saveSheetUrl");
 const saveMsg = document.getElementById("saveMsg");
 const resetBtn = document.getElementById("resetAnalytics");
+
+// Store sheetsWebhookUrl so we can open it on click
+let sheetsUrl = "";
+
+// ─── Set today's date ───────────────────────────────────────────────
+
+const todayLabel = document.getElementById("statTodayLabel");
+if (todayLabel) {
+  const now = new Date();
+  const month = now.toLocaleString("en-US", { month: "short" });
+  const day = now.getDate();
+  todayLabel.textContent = `Today (${month} ${day})`;
+}
 
 // ─── Load Settings ──────────────────────────────────────────────────
 
@@ -36,9 +51,10 @@ chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
   toggleDesktop.checked = settings.desktopNotifications;
   toggleAutoOpen.checked = settings.autoOpenCandidates;
   toggleAutoScreen.checked = settings.autoScreenCandidates;
+  toggleAcceptAll.checked = settings.acceptAll || false;
+  toggleLogRejected.checked = settings.logRejected !== false; // default true
   sheetsUrlInput.value = settings.sheetsWebhookUrl || "";
-
-  document.getElementById("statCurrent").textContent = String(currentCount);
+  sheetsUrl = settings.sheetsWebhookUrl || "";
 });
 
 // ─── Load Analytics ─────────────────────────────────────────────────
@@ -48,12 +64,14 @@ chrome.runtime.sendMessage({ type: "GET_ANALYTICS" }, (response) => {
   const a = response.analytics;
 
   // Dashboard counters
+  document.getElementById("statToday").textContent = String(a.today || 0);
   document.getElementById("statWeek").textContent = String(a.thisWeek);
   document.getElementById("statMonth").textContent = String(a.thisMonth);
   document.getElementById("statYear").textContent = String(a.thisYear);
   document.getElementById("statAllTime").textContent = String(a.totalAllTime);
 
   // Screening stats
+  document.getElementById("statScanned").textContent = String(a.totalScreened);
   document.getElementById("statQualified").textContent = String(a.totalQualified);
   document.getElementById("statRejected").textContent = String(a.totalRejected);
   document.getElementById("statQualRate").textContent = `${a.qualificationRate}%`;
@@ -80,6 +98,33 @@ chrome.runtime.sendMessage({ type: "GET_ANALYTICS" }, (response) => {
   // Rejection reasons
   renderRankedList("rejectionReasons", a.topRejectionReasons);
 });
+
+// ─── Clickable Qualified Card → Open Google Sheet ───────────────────
+
+const qualifiedCard = document.getElementById("qualifiedCard");
+if (qualifiedCard) {
+  qualifiedCard.addEventListener("click", () => {
+    if (sheetsUrl) {
+      // Extract the Google Sheet URL from the Apps Script URL
+      // Apps Script URLs look like: https://script.google.com/macros/s/.../exec
+      // We'll just open it — user can bookmark their sheet separately
+      // For now, open a new tab to Google Sheets
+      chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (resp) => {
+        if (resp && resp.settings && resp.settings.sheetsWebhookUrl) {
+          // Try to extract spreadsheet ID or just open Sheets
+          const url = resp.settings.sheetsWebhookUrl;
+          // Open the webhook URL with a GET request (shows "webhook is active")
+          // Better: let user configure sheet URL directly, or open sheets.google.com
+          chrome.tabs.create({ url: "https://docs.google.com/spreadsheets" });
+        } else {
+          chrome.tabs.create({ url: "https://docs.google.com/spreadsheets" });
+        }
+      });
+    } else {
+      chrome.tabs.create({ url: "https://docs.google.com/spreadsheets" });
+    }
+  });
+}
 
 // ─── Render Helpers ─────────────────────────────────────────────────
 
@@ -157,8 +202,23 @@ toggleAutoScreen.addEventListener("change", () => {
   });
 });
 
+toggleAcceptAll.addEventListener("change", () => {
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { acceptAll: toggleAcceptAll.checked },
+  });
+});
+
+toggleLogRejected.addEventListener("change", () => {
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { logRejected: toggleLogRejected.checked },
+  });
+});
+
 saveSheetUrlBtn.addEventListener("click", () => {
   const url = sheetsUrlInput.value.trim();
+  sheetsUrl = url;
   chrome.runtime.sendMessage({
     type: "UPDATE_SETTINGS",
     settings: { sheetsWebhookUrl: url },
@@ -170,7 +230,6 @@ saveSheetUrlBtn.addEventListener("click", () => {
 resetBtn.addEventListener("click", () => {
   if (confirm("Reset all analytics data? This cannot be undone.")) {
     chrome.runtime.sendMessage({ type: "RESET_ANALYTICS" }, () => {
-      // Refresh the popup
       window.location.reload();
     });
   }
