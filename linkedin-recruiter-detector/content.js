@@ -14,14 +14,22 @@
 (function () {
   "use strict";
 
-  // ─── Guard: only run on top-level recruiter pages, NOT profile pages ──
+  // ─── Guard: only run on top-level recruiter pages, NOT individual profile pages ──
+  // Profile pages are handled by profile-scraper.js — we don't want bell listeners there.
+  // Only skip URLs that have a specific profile ID (e.g., /profile/ABC123, /in/john-doe)
+  // Keep running on section pages like /talent/hire, /recruiter/search, etc.
   const url = window.location.href;
-  if (
-    url.includes("/profile/") ||
-    url.includes("/in/") ||
-    url.includes("/hire/")
-  ) {
-    console.log("[LNR] Skipping content.js on profile page:", url);
+  const path = new URL(url).pathname;
+
+  // These patterns indicate an INDIVIDUAL profile page (has an ID segment after the keyword)
+  const profilePatterns = [
+    /\/profile\/[^/]+/,     // /talent/profile/ABC123 or /recruiter/profile/ABC123
+    /\/in\/[^/]+/,          // /in/john-doe
+  ];
+  const isIndividualProfile = profilePatterns.some((p) => p.test(path));
+
+  if (isIndividualProfile) {
+    console.log("[LNR] Skipping content.js on individual profile page:", url);
     return;
   }
 
