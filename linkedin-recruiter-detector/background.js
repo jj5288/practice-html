@@ -513,15 +513,19 @@ function openCandidateTabs(urls, sender) {
     }).catch(() => {});
   }
 
+  // Get the window ID from the sender tab (where the bell was clicked)
+  const windowId = sender && sender.tab ? sender.tab.windowId : null;
+  console.log(`[LNR Background] Will open tabs in window ${windowId || "(default)"}`);
+
   // Open tabs one at a time with a delay between each
-  openTabsSequentially(toOpen, 0);
+  openTabsSequentially(toOpen, 0, windowId);
 }
 
 /**
- * Recursively opens tabs one at a time.
+ * Recursively opens tabs one at a time in the specified window.
  * Waits 3 seconds between each tab to let the profile load and scrape.
  */
-function openTabsSequentially(urls, index) {
+function openTabsSequentially(urls, index, windowId) {
   if (index >= urls.length) {
     console.log(`[LNR Background] All ${urls.length} tabs opened.`);
     chrome.action.setBadgeText({ text: String(urls.length) });
@@ -530,11 +534,14 @@ function openTabsSequentially(urls, index) {
   }
 
   const url = urls[index];
-  chrome.tabs.create({ url, active: false }, (tab) => {
+  const createOpts = { url, active: false };
+  if (windowId) createOpts.windowId = windowId;
+
+  chrome.tabs.create(createOpts, (tab) => {
     if (tab) {
       autoOpenedTabIds.add(tab.id);
       pipelineStats.tabsOpened++;
-      console.log(`[LNR Background] Tab ${index + 1}/${urls.length} opened: ${url.substring(0, 80)}...`);
+      console.log(`[LNR Background] Tab ${index + 1}/${urls.length} opened in window ${windowId || "default"}: ${url.substring(0, 80)}...`);
       chrome.action.setBadgeText({ text: `${index + 1}/${urls.length}` });
     } else {
       pipelineStats.tabsOpenFailed++;
@@ -542,7 +549,7 @@ function openTabsSequentially(urls, index) {
     }
 
     // Wait 3 seconds before opening the next tab
-    setTimeout(() => openTabsSequentially(urls, index + 1), 3000);
+    setTimeout(() => openTabsSequentially(urls, index + 1, windowId), 3000);
   });
 }
 
