@@ -3,25 +3,34 @@
  *
  * SIMPLIFIED TRIGGER: No automatic polling or badge detection.
  * When the user clicks the notification bell, we detect the dropdown
- * opening, extract all candidate profile links, dedup against history,
- * and open new profiles for screening (limit set in Settings).
+ * opening, extract candidate profile links ONLY FROM THE DROPDOWN,
+ * dedup against history, and open new profiles for screening.
  *
- * SAFETY: Tabs capped by user setting (default 10). Immediate deduplication.
- * Cooldown between batches. Filters out "Recommended matches".
+ * IMPORTANT: This script only activates on the main recruiter/talent
+ * pages — NOT on individual profile pages (those are handled by
+ * profile-scraper.js). This prevents duplicate triggers from multiple tabs.
  */
 
 (function () {
   "use strict";
 
+  // ─── Guard: only run on top-level recruiter pages, NOT profile pages ──
+  const url = window.location.href;
+  if (
+    url.includes("/profile/") ||
+    url.includes("/in/") ||
+    url.includes("/hire/")
+  ) {
+    console.log("[LNR] Skipping content.js on profile page:", url);
+    return;
+  }
+
   const CONFIG = {
-    // Hard cap: never open more than this many tabs in a single batch
-    MAX_TABS_PER_BATCH: 50,
-    // Minimum time between tab-open batches (10 seconds)
-    TAB_COOLDOWN_MS: 10000,
+    // Minimum time between tab-open batches (30 seconds)
+    TAB_COOLDOWN_MS: 30000,
     // Debounce: wait this long after dropdown appears before extracting links
-    // (gives LinkedIn time to render all notification items)
     DROPDOWN_DEBOUNCE_MS: 1500,
-    // Notification text patterns to SKIP (not real candidate notifications)
+    // Notification text patterns to SKIP
     SKIP_PATTERNS: [
       "recommended match",
       "recommended for you",
@@ -32,41 +41,90 @@
 
   let lastTabOpenTime = 0;
   let dropdownDebounceTimer = null;
-  // IMMEDIATE dedup: add URLs here BEFORE sending to background
   let openedCandidateUrls = new Set();
   let isEnabled = true;
+  // Prevent multiple triggers from the same bell click
+  let lastBellClickTime = 0;
 
   /**
-   * Check if a notification's surrounding text indicates it's a
-   * "Recommended matches" type notification (not a real candidate alert).
+   * Check if a notification's surrounding text is a "Recommended matches"
+   * type notification (not a real candidate alert).
    */
   function isSkippableNotification(linkElement) {
     const textToCheck = [];
     textToCheck.push((linkElement.textContent || "").toLowerCase());
-
-    // Walk up to 3 parents to find the notification container text
     let parent = linkElement.parentElement;
     for (let i = 0; i < 3 && parent; i++) {
       textToCheck.push((parent.textContent || "").toLowerCase());
       parent = parent.parentElement;
     }
-
     const combined = textToCheck.join(" ");
     return CONFIG.SKIP_PATTERNS.some((pattern) => combined.includes(pattern));
   }
 
   /**
-   * Extracts candidate profile URLs from the notification dropdown.
-   * Filters out "Recommended matches" and already-opened URLs.
-   * Returns at most MAX_TABS_PER_BATCH new URLs.
+   * Find the visible notification dropdown container on the page.
+   * Returns the dropdown element, or null if not found/not visible.
+   */
+  function findVisibleDropdown() {
+    const DROPDOWN_SELECTORS = [
+      '[class*="notification-dropdown"]',
+      '[class*="notification-list"]',
+      '[class*="notifications-dropdown"]',
+      '[class*="notification-panel"]',
+      '[class*="notifications-panel"]',
+      '[class*="notification-content"]',
+      '[class*="hp-notification"]',
+      '[class*="notification-card"]',
+      '[aria-label*="Notification"]',
+      '[class*="notification"] [class*="dropdown"]',
+      '[class*="notification"] [class*="panel"]',
+      '[class*="notification"] [class*="list"]',
+    ];
+
+    for (const selector of DROPDOWN_SELECTORS) {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        if (el.offsetParent !== null && el.querySelectorAll("a[href]").length > 0) {
+          return el;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extracts candidate profile URLs ONLY from inside the notification dropdown.
+   * Does NOT scan the whole page — this prevents picking up links from
+   * profile pages, search results, sidebar recommendations, etc.
    */
   function extractCandidateLinks() {
+    // First, find the dropdown container
+    const dropdown = findVisibleDropdown();
+
+    // Determine where to search for links
+    let searchRoot;
+    if (dropdown) {
+      searchRoot = dropdown;
+      console.log("[LNR] Extracting links from notification dropdown element.");
+    } else {
+      // Fallback: if we can't find a specific dropdown, search the page
+      // but ONLY within notification-related containers
+      console.log("[LNR] No dropdown found — searching notification containers only.");
+      searchRoot = null;
+    }
+
     const urls = [];
     const seen = new Set();
 
-    // Strategy 1: Find any links to candidate/profile pages on the page
-    const allLinks = document.querySelectorAll("a[href]");
-    for (const link of allLinks) {
+    // Get links from the dropdown (or notification containers)
+    const links = searchRoot
+      ? searchRoot.querySelectorAll("a[href]")
+      : document.querySelectorAll(
+          '[class*="notification"] a[href], [class*="alert"] a[href], [class*="update"] a[href]'
+        );
+
+    for (const link of links) {
       const href = link.href || "";
       // Must be a LinkedIn profile-type URL
       if (
@@ -76,7 +134,7 @@
         !href.includes("/talent/")
       )
         continue;
-      // Skip navigation and non-candidate links
+      // Skip navigation links
       if (
         href.includes("/settings") ||
         href.includes("/search?") ||
@@ -87,55 +145,18 @@
       const normalizedUrl = normalizeUrl(href);
       if (openedCandidateUrls.has(normalizedUrl)) continue;
       if (seen.has(normalizedUrl)) continue;
-
-      // Skip "Recommended matches" notifications
-      if (isSkippableNotification(link)) {
-        console.log("[LNR] Skipping recommended match:", href);
-        continue;
-      }
+      if (isSkippableNotification(link)) continue;
 
       seen.add(normalizedUrl);
       urls.push(href);
-
-      if (urls.length >= CONFIG.MAX_TABS_PER_BATCH) break;
     }
 
-    // Strategy 2: Look inside notification items with broader selectors
-    if (urls.length < CONFIG.MAX_TABS_PER_BATCH) {
-      const notifSelectors = [
-        '[class*="notification"] a[href*="/profile/"]',
-        '[class*="notification"] a[href*="/talent/"]',
-        '[class*="notification"] a[href*="/hire/"]',
-        '[class*="notification"] a[href*="/in/"]',
-        '[class*="alert"] a[href*="/profile/"]',
-        '[class*="alert"] a[href*="/talent/"]',
-        '[class*="update"] a[href*="/profile/"]',
-        '[class*="update"] a[href*="/talent/"]',
-      ];
-      for (const selector of notifSelectors) {
-        const links = document.querySelectorAll(selector);
-        for (const link of links) {
-          if (!link.href) continue;
-          const normalizedUrl = normalizeUrl(link.href);
-          if (openedCandidateUrls.has(normalizedUrl)) continue;
-          if (seen.has(normalizedUrl)) continue;
-          if (isSkippableNotification(link)) continue;
-
-          seen.add(normalizedUrl);
-          urls.push(link.href);
-
-          if (urls.length >= CONFIG.MAX_TABS_PER_BATCH) break;
-        }
-        if (urls.length >= CONFIG.MAX_TABS_PER_BATCH) break;
-      }
-    }
-
-    console.log(`[LNR] extractCandidateLinks found ${urls.length} URL(s)`);
+    console.log(`[LNR] extractCandidateLinks found ${urls.length} URL(s) (from ${searchRoot ? "dropdown" : "notification containers"})`);
     return urls;
   }
 
   /**
-   * Normalize a URL for deduplication — strip hash and query noise.
+   * Normalize a URL for deduplication.
    */
   function normalizeUrl(url) {
     try {
@@ -148,7 +169,7 @@
   }
 
   /**
-   * Safely send candidate URLs to background for tab opening.
+   * Send candidate URLs to background for tab opening.
    * Enforces cooldown and immediate dedup.
    */
   function sendCandidateUrls(urls) {
@@ -159,21 +180,18 @@
 
     const now = Date.now();
     if (now - lastTabOpenTime < CONFIG.TAB_COOLDOWN_MS) {
-      console.log(
-        `[LNR] Tab cooldown active — skipping ${urls.length} URLs (${Math.round((CONFIG.TAB_COOLDOWN_MS - (now - lastTabOpenTime)) / 1000)}s remaining)`
-      );
+      const remaining = Math.round((CONFIG.TAB_COOLDOWN_MS - (now - lastTabOpenTime)) / 1000);
+      console.log(`[LNR] Cooldown active — skipping ${urls.length} URLs (${remaining}s remaining)`);
       return;
     }
 
-    // IMMEDIATELY mark these as opened BEFORE sending to background
+    // Mark as opened BEFORE sending to background
     for (const url of urls) {
       openedCandidateUrls.add(normalizeUrl(url));
     }
     lastTabOpenTime = now;
 
-    console.log(
-      `[LNR] Opening ${urls.length} candidate tab(s) (max ${CONFIG.MAX_TABS_PER_BATCH})`
-    );
+    console.log(`[LNR] Sending ${urls.length} candidate URL(s) to background for tab opening.`);
 
     chrome.runtime.sendMessage({
       type: "CANDIDATE_LINKS_FOUND",
@@ -184,12 +202,11 @@
 
   /**
    * Called when we detect the notification dropdown has appeared.
-   * Debounces to let LinkedIn finish rendering, then extracts links.
    */
   function onDropdownDetected() {
     if (!isEnabled) return;
 
-    // Debounce: wait for dropdown to finish loading
+    // Debounce to let dropdown finish rendering
     if (dropdownDebounceTimer) clearTimeout(dropdownDebounceTimer);
     dropdownDebounceTimer = setTimeout(() => {
       console.log("[LNR] Notification dropdown detected — extracting links...");
@@ -200,57 +217,11 @@
 
   // ─── Dropdown Detection ──────────────────────────────────────────
 
-  /**
-   * PRIMARY TRIGGER: Watches for the notification dropdown to appear.
-   * This fires when the user clicks the bell icon.
-   */
   function setupDropdownObserver() {
-    // Broad selectors for notification dropdown/panel
-    const DROPDOWN_SELECTORS = [
-      '[class*="notification-dropdown"]',
-      '[class*="notification-list"]',
-      '[class*="notifications-dropdown"]',
-      '[class*="notification-panel"]',
-      '[class*="notifications-panel"]',
-      '[class*="notification-content"]',
-      '[aria-label*="Notification"]',
-      '[class*="notification"] [class*="dropdown"]',
-      '[class*="notification"] [class*="panel"]',
-      '[class*="notification"] [class*="list"]',
-      // LinkedIn Recruiter specific patterns
-      '[class*="hp-notification"]',
-      '[class*="notification-card"]',
-    ];
-
-    const observer = new MutationObserver((mutations) => {
-      for (const selector of DROPDOWN_SELECTORS) {
-        const dropdowns = document.querySelectorAll(selector);
-        for (const dropdown of dropdowns) {
-          if (dropdown.offsetParent !== null) {
-            // Dropdown is visible — trigger extraction
-            onDropdownDetected();
-            return;
-          }
-        }
-      }
-
-      // Fallback: check if any mutation added a notification-like container
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType !== 1) continue;
-          const el = node;
-          const cls = (el.className || "").toString().toLowerCase();
-          if (
-            cls.includes("notification") ||
-            cls.includes("dropdown") ||
-            cls.includes("panel")
-          ) {
-            if (el.querySelectorAll('a[href*="/profile/"], a[href*="/in/"], a[href*="/talent/"], a[href*="/hire/"]').length > 0) {
-              onDropdownDetected();
-              return;
-            }
-          }
-        }
+    const observer = new MutationObserver(() => {
+      const dropdown = findVisibleDropdown();
+      if (dropdown) {
+        onDropdownDetected();
       }
     });
 
@@ -264,10 +235,6 @@
 
   // ─── Bell Click Interceptor ────────────────────────────────────────
 
-  /**
-   * BACKUP TRIGGER: Also listen for clicks on the bell icon itself.
-   * After a click, wait a moment for the dropdown to render, then extract.
-   */
   function setupBellClickListener() {
     const BELL_SELECTORS = [
       '[class*="notification-bell"]',
@@ -279,19 +246,21 @@
       '[data-test*="notification"]',
       '[class*="hp-nav"] [class*="notification"]',
       '[class*="nav-item"] [class*="notification"]',
-      // Generic: any small clickable element near notification badges
       '[class*="notification"][class*="icon"]',
     ];
 
     document.addEventListener("click", (e) => {
       if (!isEnabled) return;
 
-      // Check if the click was on or inside a bell/notification element
+      // Prevent double-trigger: ignore clicks within 5 seconds of last bell click
+      const now = Date.now();
+      if (now - lastBellClickTime < 5000) return;
+
       for (const selector of BELL_SELECTORS) {
         const bellEl = e.target.closest(selector);
         if (bellEl) {
+          lastBellClickTime = now;
           console.log("[LNR] Bell icon clicked — will extract links after dropdown loads.");
-          // Wait for dropdown to render (longer than debounce since this is the initial trigger)
           setTimeout(() => {
             const urls = extractCandidateLinks();
             sendCandidateUrls(urls);
@@ -299,7 +268,7 @@
           return;
         }
       }
-    }, true); // Use capture phase to catch it before LinkedIn's handlers
+    }, true);
 
     console.log("[LNR] Bell click listener active.");
   }
@@ -342,9 +311,7 @@
       }
     }
     if (found.length > 0) {
-      console.log(
-        "[LNR] Bell/notification elements found:\n" + found.join("\n")
-      );
+      console.log("[LNR] Bell/notification elements found:\n" + found.join("\n"));
     } else {
       console.log("[LNR] WARNING: No bell/notification elements found on page!");
     }
@@ -375,7 +342,5 @@
   setupBellClickListener();
 
   console.log("[LNR] Content script loaded on:", window.location.href);
-  console.log(
-    `[LNR] Mode: BELL-CLICK — click the notification bell to scan up to ${CONFIG.MAX_TABS_PER_BATCH} profiles`
-  );
+  console.log("[LNR] Mode: BELL-CLICK — click the notification bell to scan profiles");
 })();
