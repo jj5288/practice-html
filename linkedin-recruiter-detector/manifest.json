@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Recruiter Notification Detector",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Detects LinkedIn Recruiter notifications, screens candidates via AI, and pushes qualified ones to Google Sheets.",
   "permissions": [
     "notifications",

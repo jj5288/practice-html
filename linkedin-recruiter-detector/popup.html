@@ -542,30 +542,30 @@
       <h3>How to Run the Extension</h3>
       <ol>
         <li>Open Chrome and go to <strong>LinkedIn Recruiter</strong> (the URL must start with <code>linkedin.com/recruiter/</code> or <code>linkedin.com/talent/</code>)</li>
-        <li>Leave that tab <strong>open and loaded</strong></li>
-        <li>You should see a small <strong>"LNR Active"</strong> indicator in the bottom-right corner of the page</li>
-        <li>The extension checks for the red notification badge every 3-5 seconds</li>
-        <li>When a notification is detected, it will auto-open candidate profiles and screen them</li>
+        <li>You should see a small <strong>"LNR Active — Click bell to scan"</strong> indicator on the page</li>
+        <li><strong>Click the notification bell</strong> on LinkedIn Recruiter</li>
+        <li>The extension detects the dropdown, extracts all new candidate profile links (up to 50), and opens them in background tabs</li>
+        <li>Each profile is automatically scraped and screened by AI, then pushed to Google Sheets</li>
       </ol>
     </div>
 
     <div class="help-section">
       <h3>Requirements</h3>
       <ul>
-        <li><span class="warn">Chrome must be open</span> — the extension runs inside your browser, not as a separate app</li>
-        <li><span class="warn">Laptop must be open</span> — closing the lid suspends Chrome and stops the extension</li>
-        <li>The LinkedIn Recruiter tab must be <strong>loaded</strong> (not sleeping). If Chrome put it to sleep, click the tab once to wake it up</li>
-        <li>The tab does NOT need to be in the foreground — you can use other tabs while it scans</li>
+        <li><span class="warn">Chrome must be open</span> — the extension runs inside your browser</li>
+        <li>The LinkedIn Recruiter tab must be <strong>loaded</strong> (not sleeping)</li>
+        <li>You trigger the scan manually by <strong>clicking the notification bell</strong> — no automatic polling</li>
+        <li>Duplicates are automatically filtered — profiles already opened won't be opened again</li>
       </ul>
     </div>
 
     <div class="help-section">
-      <h3>Not Detecting Notifications?</h3>
+      <h3>Not Finding Profiles?</h3>
       <ol>
-        <li>Check for the <strong>"LNR Active — Scanning..."</strong> indicator at the bottom-right of the LinkedIn Recruiter page. If you don't see it, the extension is not loaded on that page.</li>
-        <li>Make sure your URL starts with <code>linkedin.com/recruiter/</code> or <code>linkedin.com/talent/</code>. Regular LinkedIn pages won't activate the extension.</li>
-        <li>Open the browser console (<code>F12</code> > Console tab) and look for messages starting with <code>[LNR]</code>. These tell you exactly what the extension sees.</li>
-        <li>Try clicking the notification bell manually to trigger a red badge, then watch the console for detection logs.</li>
+        <li>Check for the <strong>"LNR Active — Click bell to scan"</strong> indicator on the page. If missing, the extension isn't loaded — make sure your URL starts with <code>linkedin.com/recruiter/</code> or <code>linkedin.com/talent/</code>.</li>
+        <li>Open the browser console (<code>F12</code> > Console tab) and look for messages starting with <code>[LNR]</code>.</li>
+        <li>After clicking the bell, you should see <code>[LNR] Bell icon clicked</code> and <code>[LNR] extractCandidateLinks found X URL(s)</code>.</li>
+        <li>If 0 URLs found, the dropdown may use different CSS classes. Share the <code>[LNR] PAGE DIAGNOSTIC</code> output from the console so we can update selectors.</li>
       </ol>
     </div>
 
@@ -591,7 +591,7 @@
     </div>
   </div>
 
-  <div class="footer">v2.4 — AI screening with auto-fallback</div>
+  <div class="footer">v3.0 — Bell-click trigger + AI screening</div>
 
   <script src="popup.js"></script>
 </body>

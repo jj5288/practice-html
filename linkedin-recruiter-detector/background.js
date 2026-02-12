@@ -203,12 +203,6 @@ function saveAutoOpenedTabIds() {
 // ─── Message Handling ───────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "NOTIFICATION_DETECTED") {
-    handleNotificationDetected(message, sender);
-  }
-  if (message.type === "NOTIFICATIONS_CLEARED") {
-    handleNotificationsCleared();
-  }
   if (message.type === "CANDIDATE_LINKS_FOUND") {
     openCandidateTabs(message.candidateUrls, sender);
   }
@@ -439,52 +433,8 @@ function formatHour(h) {
 }
 
 // ─── Notification Handling ──────────────────────────────────────────
-
-function handleNotificationDetected(message, sender) {
-  const { count, candidateUrls, isNewNotification } = message;
-  currentCount = count;
-  pipelineStats.notificationsDetected++;
-
-  chrome.action.setBadgeText({ text: String(count) });
-  chrome.action.setBadgeBackgroundColor({ color: "#e94560" });
-
-  if (isNewNotification) {
-    const now = new Date();
-    const newCount = count - (analytics._lastCount || 0);
-    const added = Math.max(newCount, 1);
-    analytics.totalAllTime += added;
-    for (let i = 0; i < added; i++) {
-      analytics.notificationTimestamps.push(now.getTime());
-    }
-    analytics.hourHistogram[now.getHours()] += added;
-    analytics.dayHistogram[now.getDay()] += added;
-    analytics._lastCount = count;
-
-    const twoYearsAgo = now.getTime() - 730 * 86400000;
-    analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
-    saveAnalytics();
-  }
-
-  if (settings.desktopNotifications) {
-    chrome.notifications.create(`lnr-notif-${Date.now()}`, {
-      type: "basic",
-      iconUrl: "icons/icon128.png",
-      title: "LinkedIn Recruiter",
-      message: `You have ${count} new notification${count !== 1 ? "s" : ""} in LinkedIn Recruiter!`,
-      priority: 2,
-    });
-  }
-
-  if (isNewNotification && candidateUrls && candidateUrls.length > 0) {
-    openCandidateTabs(candidateUrls, sender);
-  }
-}
-
-function handleNotificationsCleared() {
-  currentCount = 0;
-  analytics._lastCount = 0;
-  chrome.action.setBadgeText({ text: "" });
-}
+// Notifications are now triggered by bell-click in content.js.
+// The CANDIDATE_LINKS_FOUND message is the sole entry point.
 
 /**
  * Normalize URL for deduplication — strip hash and query noise.
@@ -508,6 +458,22 @@ function normalizeUrl(url) {
  */
 function openCandidateTabs(urls, sender) {
   if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
+
+  // Track bell-click as a notification event for analytics
+  const now = new Date();
+  analytics.totalAllTime += urls.length;
+  for (let i = 0; i < urls.length; i++) {
+    analytics.notificationTimestamps.push(now.getTime());
+  }
+  analytics.hourHistogram[now.getHours()] += urls.length;
+  analytics.dayHistogram[now.getDay()] += urls.length;
+  const twoYearsAgo = now.getTime() - 730 * 86400000;
+  analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
+  saveAnalytics();
+
+  // Update badge
+  chrome.action.setBadgeText({ text: String(urls.length) });
+  chrome.action.setBadgeBackgroundColor({ color: "#4ecca3" });
 
   // Filter out already-opened URLs (persistent across restarts)
   const newUrls = [];
