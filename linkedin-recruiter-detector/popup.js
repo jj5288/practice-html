@@ -19,6 +19,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 const toggleEnabled = document.getElementById("toggleEnabled");
 const toggleDesktop = document.getElementById("toggleDesktop");
 const toggleAutoOpen = document.getElementById("toggleAutoOpen");
+const maxProfilesInput = document.getElementById("maxProfiles");
 const toggleAutoScreen = document.getElementById("toggleAutoScreen");
 const toggleAcceptAll = document.getElementById("toggleAcceptAll");
 const toggleLogRejected = document.getElementById("toggleLogRejected");
@@ -112,6 +113,7 @@ chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
   toggleEnabled.checked = settings.enabled;
   toggleDesktop.checked = settings.desktopNotifications;
   toggleAutoOpen.checked = settings.autoOpenCandidates;
+  maxProfilesInput.value = settings.maxProfilesToOpen || 10;
   toggleAutoScreen.checked = settings.autoScreenCandidates;
   toggleAcceptAll.checked = settings.acceptAll || false;
   toggleLogRejected.checked = settings.logRejected !== false; // default true
@@ -302,6 +304,7 @@ chrome.runtime.sendMessage({ type: "GET_PIPELINE_STATS" }, (resp) => {
     `Scrape checks:           ${ok(s.scrapeChecks)}`,
     `Scrapes completed:       ${ok(s.scrapeCompleted)}`,
     `LLM calls:               ${ok(s.llmCalls)} (errors: ${s.llmErrors}, fallbacks: ${s.llmFallbacks})`,
+    `Sheets pushed:           ${ok(s.sheetsPushOk)} (failed: ${s.sheetsPushFail || 0})`,
   ].join("<br>");
 });
 
@@ -325,6 +328,15 @@ toggleAutoOpen.addEventListener("change", () => {
   chrome.runtime.sendMessage({
     type: "UPDATE_SETTINGS",
     settings: { autoOpenCandidates: toggleAutoOpen.checked },
+  });
+});
+
+maxProfilesInput.addEventListener("change", () => {
+  const val = Math.max(1, Math.min(50, parseInt(maxProfilesInput.value, 10) || 10));
+  maxProfilesInput.value = val;
+  chrome.runtime.sendMessage({
+    type: "UPDATE_SETTINGS",
+    settings: { maxProfilesToOpen: val },
   });
 });
 

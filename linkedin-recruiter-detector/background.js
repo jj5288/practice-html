@@ -75,6 +75,7 @@ const DEFAULT_SETTINGS = {
   autoScreenCandidates: true,
   acceptAll: false,        // When true, skip rejection rules — accept all candidates
   logRejected: true,       // When true, push rejected candidates to "Rejected" sheet tab
+  maxProfilesToOpen: 10,   // Max tabs to open per bell-click (user adjustable, default 10)
   sheetsWebhookUrl: "",
   soundAlert: false,
   // LLM configuration
@@ -93,7 +94,6 @@ let isScreening = false;
 let autoOpenedTabIds = new Set();
 // Dedup: track URLs we've already opened (normalized) — persisted across restarts
 let openedUrls = new Set();
-const MAX_TABS_PER_BATCH = 50;
 
 // ─── Pipeline Diagnostics ─────────────────────────────────────────
 // These counters help debug where the pipeline breaks.
@@ -108,6 +108,8 @@ const pipelineStats = {
   llmCalls: 0,
   llmErrors: 0,
   llmFallbacks: 0,
+  sheetsPushOk: 0,
+  sheetsPushFail: 0,
 };
 
 // ─── Analytics Data Structure ───────────────────────────────────────
@@ -450,30 +452,16 @@ function normalizeUrl(url) {
 }
 
 /**
- * Opens candidate profile URLs in new background tabs.
- * Appends #lnr-auto to the URL so the profile scraper knows
- * this tab was auto-opened (not manual browsing).
+ * Opens candidate profile URLs in new background tabs — ONE AT A TIME.
+ * Waits for each tab to finish loading before opening the next one.
+ * This prevents overwhelming the browser and gives each profile time to load and scrape.
  *
- * SAFETY: Deduplicates URLs, enforces a hard cap of MAX_TABS_PER_BATCH.
+ * SAFETY: Deduplicates URLs, enforces the user-configured maxProfilesToOpen cap.
  */
 function openCandidateTabs(urls, sender) {
   if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
 
-  // Track bell-click as a notification event for analytics
-  const now = new Date();
-  analytics.totalAllTime += urls.length;
-  for (let i = 0; i < urls.length; i++) {
-    analytics.notificationTimestamps.push(now.getTime());
-  }
-  analytics.hourHistogram[now.getHours()] += urls.length;
-  analytics.dayHistogram[now.getDay()] += urls.length;
-  const twoYearsAgo = now.getTime() - 730 * 86400000;
-  analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
-  saveAnalytics();
-
-  // Update badge
-  chrome.action.setBadgeText({ text: String(urls.length) });
-  chrome.action.setBadgeBackgroundColor({ color: "#4ecca3" });
+  const maxTabs = settings.maxProfilesToOpen || 10;
 
   // Filter out already-opened URLs (persistent across restarts)
   const newUrls = [];
@@ -486,45 +474,76 @@ function openCandidateTabs(urls, sender) {
   }
   saveOpenedUrls();
 
-  // Enforce hard cap
-  const toOpen = newUrls.slice(0, MAX_TABS_PER_BATCH);
+  // Enforce user-configured cap
+  const toOpen = newUrls.slice(0, maxTabs);
 
   if (toOpen.length === 0) {
     console.log("[LNR Background] All URLs already opened — skipping.");
     return;
   }
 
-  if (newUrls.length > MAX_TABS_PER_BATCH) {
-    console.warn(`[LNR Background] Capped from ${newUrls.length} to ${MAX_TABS_PER_BATCH} tabs.`);
+  if (newUrls.length > maxTabs) {
+    console.warn(`[LNR Background] Capped from ${newUrls.length} to ${maxTabs} tabs (user setting).`);
   }
 
-  console.log(`[LNR Background] Opening ${toOpen.length} tab(s).`);
+  // Track bell-click as a notification event for analytics
+  const now = new Date();
+  analytics.totalAllTime += toOpen.length;
+  for (let i = 0; i < toOpen.length; i++) {
+    analytics.notificationTimestamps.push(now.getTime());
+  }
+  analytics.hourHistogram[now.getHours()] += toOpen.length;
+  analytics.dayHistogram[now.getDay()] += toOpen.length;
+  const twoYearsAgo = now.getTime() - 730 * 86400000;
+  analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
+  saveAnalytics();
+
+  // Update badge
+  chrome.action.setBadgeText({ text: `0/${toOpen.length}` });
+  chrome.action.setBadgeBackgroundColor({ color: "#4ecca3" });
+
+  console.log(`[LNR Background] Opening ${toOpen.length} tab(s) SEQUENTIALLY (max ${maxTabs}).`);
   pipelineStats.candidateUrlsFound += toOpen.length;
 
-  const opened = [];
-  for (const url of toOpen) {
-    chrome.tabs.create({ url, active: false }, (tab) => {
-      if (tab) {
-        autoOpenedTabIds.add(tab.id);
-        pipelineStats.tabsOpened++;
-        console.log(`[LNR Background] Tab ${tab.id} opened for: ${url.substring(0, 80)}...`);
-      } else {
-        pipelineStats.tabsOpenFailed++;
-        console.error(`[LNR Background] Failed to open tab for: ${url}`);
-      }
-      opened.push(url);
-      if (opened.length === toOpen.length) {
-        // Persist tab IDs so they survive service worker restarts
-        saveAutoOpenedTabIds();
-        if (sender && sender.tab) {
-          chrome.tabs.sendMessage(sender.tab.id, {
-            type: "TABS_OPENED",
-            urls: opened,
-          });
-        }
-      }
-    });
+  // Tell content script which URLs we're opening
+  if (sender && sender.tab) {
+    chrome.tabs.sendMessage(sender.tab.id, {
+      type: "TABS_OPENED",
+      urls: toOpen,
+    }).catch(() => {});
   }
+
+  // Open tabs one at a time with a delay between each
+  openTabsSequentially(toOpen, 0);
+}
+
+/**
+ * Recursively opens tabs one at a time.
+ * Waits 3 seconds between each tab to let the profile load and scrape.
+ */
+function openTabsSequentially(urls, index) {
+  if (index >= urls.length) {
+    console.log(`[LNR Background] All ${urls.length} tabs opened.`);
+    chrome.action.setBadgeText({ text: String(urls.length) });
+    saveAutoOpenedTabIds();
+    return;
+  }
+
+  const url = urls[index];
+  chrome.tabs.create({ url, active: false }, (tab) => {
+    if (tab) {
+      autoOpenedTabIds.add(tab.id);
+      pipelineStats.tabsOpened++;
+      console.log(`[LNR Background] Tab ${index + 1}/${urls.length} opened: ${url.substring(0, 80)}...`);
+      chrome.action.setBadgeText({ text: `${index + 1}/${urls.length}` });
+    } else {
+      pipelineStats.tabsOpenFailed++;
+      console.error(`[LNR Background] Failed to open tab ${index + 1}/${urls.length}: ${url}`);
+    }
+
+    // Wait 3 seconds before opening the next tab
+    setTimeout(() => openTabsSequentially(urls, index + 1), 3000);
+  });
 }
 
 function broadcastToContentScripts(message) {
@@ -561,11 +580,24 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 function handleProfileScraped(message, sender) {
   pipelineStats.scrapeCompleted++;
-  console.log(`[LNR Background] PROFILE_SCRAPED received (total: ${pipelineStats.scrapeCompleted}). Name: ${message.profile?.name || "unknown"}, URL: ${message.url || "unknown"}`);
+  const p = message.profile || {};
+  console.log(`[LNR Background] ══════════════════════════════════════`);
+  console.log(`[LNR Background] PROFILE_SCRAPED #${pipelineStats.scrapeCompleted}`);
+  console.log(`[LNR Background]   Name: "${p.name || "(empty)"}"`);
+  console.log(`[LNR Background]   Headline: "${(p.headline || "(empty)").substring(0, 80)}"`);
+  console.log(`[LNR Background]   Location: "${p.location || "(empty)"}"`);
+  console.log(`[LNR Background]   Experience items: ${p.experience ? p.experience.length : 0}`);
+  console.log(`[LNR Background]   RawText length: ${(p.rawText || "").length} chars`);
+  console.log(`[LNR Background]   URL: ${message.url || "(none)"}`);
+  console.log(`[LNR Background] ══════════════════════════════════════`);
 
   if (!settings.autoScreenCandidates) {
     console.log("[LNR Background] Auto-screen is OFF — skipping screening.");
     return;
+  }
+
+  if (!p.rawText || p.rawText.length < 30) {
+    console.warn("[LNR Background] WARNING: Profile has very little text data — LLM may produce poor results.");
   }
 
   message.profile._scrapedAt = Date.now();
@@ -713,11 +745,13 @@ async function processScreeningQueue() {
 
       saveAnalytics();
     } catch (err) {
-      console.error("[LNR Detector] Screening error:", err);
+      console.error(`[LNR Background] ❌ SCREENING PIPELINE ERROR for "${profile.name || "unknown"}":`, err.message);
+      console.error("[LNR Background] Full error:", err);
     }
   }
 
   isScreening = false;
+  console.log("[LNR Background] Screening queue empty — pipeline idle.");
 }
 
 function categorizeRejection(reason) {
@@ -953,12 +987,14 @@ RESPOND WITH EXACTLY THIS JSON FORMAT AND NOTHING ELSE:
 }
 
 function parseScreeningResponse(content, profile) {
+  console.log(`[LNR Background] LLM raw response (first 500 chars): ${content.substring(0, 500)}`);
   try {
     let jsonStr = content;
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) jsonStr = jsonMatch[0];
 
     const parsed = JSON.parse(jsonStr);
+    console.log(`[LNR Background] Parsed LLM JSON — qualified: ${parsed.qualified}, fitScore: ${parsed.fitScore}, name: ${parsed.firstName} ${parsed.lastName}`);
 
     return {
       qualified: parsed.qualified === true,
@@ -991,10 +1027,11 @@ function parseScreeningResponse(content, profile) {
       },
     };
   } catch (err) {
-    console.error("[LNR Detector] Failed to parse LLM response:", content);
+    console.error(`[LNR Background] ❌ FAILED to parse LLM response as JSON. Error: ${err.message}`);
+    console.error(`[LNR Background] Full LLM response was:\n${content}`);
     return {
       qualified: false,
-      reason: "Could not parse LLM screening response",
+      reason: `Could not parse LLM screening response: ${err.message}`,
       data: {},
     };
   }
@@ -1074,10 +1111,15 @@ async function pushToGoogleSheet(candidateData) {
   });
 
   if (!response.ok) {
-    throw new Error(`Sheets webhook error: ${response.status}`);
+    pipelineStats.sheetsPushFail++;
+    const errBody = await response.text().catch(() => "");
+    console.error(`[LNR Background] Sheets push FAILED (#${pipelineStats.sheetsPushFail}): ${response.status} ${response.statusText}`, errBody.substring(0, 300));
+    throw new Error(`Sheets webhook error: ${response.status} ${errBody.substring(0, 100)}`);
   }
 
-  console.log("[LNR Detector] Candidate pushed to Google Sheet.");
+  pipelineStats.sheetsPushOk++;
+  const respText = await response.text().catch(() => "");
+  console.log(`[LNR Background] Sheets push SUCCESS (#${pipelineStats.sheetsPushOk}). Response: ${respText.substring(0, 200)}`);
 }
 
 async function pushRejectedToSheet(candidateData, reason) {

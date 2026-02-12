@@ -4,9 +4,9 @@
  * SIMPLIFIED TRIGGER: No automatic polling or badge detection.
  * When the user clicks the notification bell, we detect the dropdown
  * opening, extract all candidate profile links, dedup against history,
- * and open up to 50 new profiles for screening.
+ * and open new profiles for screening (limit set in Settings).
  *
- * SAFETY: Hard cap of 50 tabs per batch. Immediate deduplication.
+ * SAFETY: Tabs capped by user setting (default 10). Immediate deduplication.
  * Cooldown between batches. Filters out "Recommended matches".
  */
 
