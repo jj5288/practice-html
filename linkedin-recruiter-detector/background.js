@@ -206,7 +206,7 @@ function saveAutoOpenedTabIds() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CANDIDATE_LINKS_FOUND") {
-    openCandidateTabs(message.candidateUrls, sender);
+    pushUrlsToSheet(message.candidateUrls, sender);
   }
   if (message.type === "PROFILE_SCRAPED") {
     handleProfileScraped(message, sender);
@@ -452,18 +452,20 @@ function normalizeUrl(url) {
 }
 
 /**
- * Opens candidate profile URLs in new background tabs — ONE AT A TIME.
- * Waits for each tab to finish loading before opening the next one.
- * This prevents overwhelming the browser and gives each profile time to load and scrape.
- *
- * SAFETY: Deduplicates URLs, enforces the user-configured maxProfilesToOpen cap.
+ * Pushes candidate profile URLs directly to Google Sheets.
+ * No tabs opened — just URLs sent to the "New Leads" sheet tab.
+ * Deduplicates against previously sent URLs.
  */
-function openCandidateTabs(urls, sender) {
-  if (!settings.autoOpenCandidates || !urls || urls.length === 0) return;
+async function pushUrlsToSheet(urls, sender) {
+  if (!urls || urls.length === 0) return;
 
-  const maxTabs = settings.maxProfilesToOpen || 10;
+  const webhookUrl = settings.sheetsWebhookUrl;
+  if (!webhookUrl) {
+    console.warn("[LNR Background] No Google Sheets webhook URL configured — cannot push URLs.");
+    return;
+  }
 
-  // Filter out already-opened URLs (persistent across restarts)
+  // Filter out already-sent URLs (persistent across restarts)
   const newUrls = [];
   for (const url of urls) {
     const norm = normalizeUrl(url);
@@ -474,83 +476,75 @@ function openCandidateTabs(urls, sender) {
   }
   saveOpenedUrls();
 
-  // Enforce user-configured cap
-  const toOpen = newUrls.slice(0, maxTabs);
-
-  if (toOpen.length === 0) {
-    console.log("[LNR Background] All URLs already opened — skipping.");
+  if (newUrls.length === 0) {
+    console.log("[LNR Background] All URLs already sent — skipping.");
+    chrome.action.setBadgeText({ text: "0" });
     return;
   }
 
-  if (newUrls.length > maxTabs) {
-    console.warn(`[LNR Background] Capped from ${newUrls.length} to ${maxTabs} tabs (user setting).`);
-  }
-
-  // Track bell-click as a notification event for analytics
+  // Track as notification events for analytics
   const now = new Date();
-  analytics.totalAllTime += toOpen.length;
-  for (let i = 0; i < toOpen.length; i++) {
+  analytics.totalAllTime += newUrls.length;
+  for (let i = 0; i < newUrls.length; i++) {
     analytics.notificationTimestamps.push(now.getTime());
   }
-  analytics.hourHistogram[now.getHours()] += toOpen.length;
-  analytics.dayHistogram[now.getDay()] += toOpen.length;
+  analytics.hourHistogram[now.getHours()] += newUrls.length;
+  analytics.dayHistogram[now.getDay()] += newUrls.length;
   const twoYearsAgo = now.getTime() - 730 * 86400000;
   analytics.notificationTimestamps = analytics.notificationTimestamps.filter((t) => t > twoYearsAgo);
   saveAnalytics();
 
-  // Update badge
-  chrome.action.setBadgeText({ text: `0/${toOpen.length}` });
+  pipelineStats.candidateUrlsFound += newUrls.length;
+
+  // Update badge to show how many we're pushing
+  chrome.action.setBadgeText({ text: String(newUrls.length) });
   chrome.action.setBadgeBackgroundColor({ color: "#4ecca3" });
 
-  console.log(`[LNR Background] Opening ${toOpen.length} tab(s) SEQUENTIALLY (max ${maxTabs}).`);
-  pipelineStats.candidateUrlsFound += toOpen.length;
+  console.log(`[LNR Background] Pushing ${newUrls.length} URL(s) to Google Sheet...`);
 
-  // Tell content script which URLs we're opening
+  // Tell content script which URLs were processed
   if (sender && sender.tab) {
     chrome.tabs.sendMessage(sender.tab.id, {
       type: "TABS_OPENED",
-      urls: toOpen,
+      urls: newUrls,
     }).catch(() => {});
   }
 
-  // Get the window ID from the sender tab (where the bell was clicked)
-  const windowId = sender && sender.tab ? sender.tab.windowId : null;
-  console.log(`[LNR Background] Will open tabs in window ${windowId || "(default)"}`);
+  // Send all URLs in one batch to the sheet
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add_leads",
+        urls: newUrls,
+        timestamp: now.toISOString(),
+      }),
+    });
 
-  // Open tabs one at a time with a delay between each
-  openTabsSequentially(toOpen, 0, windowId);
-}
-
-/**
- * Recursively opens tabs one at a time in the specified window.
- * Waits 3 seconds between each tab to let the profile load and scrape.
- */
-function openTabsSequentially(urls, index, windowId) {
-  if (index >= urls.length) {
-    console.log(`[LNR Background] All ${urls.length} tabs opened.`);
-    chrome.action.setBadgeText({ text: String(urls.length) });
-    saveAutoOpenedTabIds();
-    return;
+    if (!response.ok) {
+      pipelineStats.sheetsPushFail++;
+      const errBody = await response.text().catch(() => "");
+      console.error(`[LNR Background] Leads push FAILED: ${response.status}`, errBody.substring(0, 300));
+    } else {
+      pipelineStats.sheetsPushOk++;
+      const respText = await response.text().catch(() => "");
+      console.log(`[LNR Background] Leads push SUCCESS — ${newUrls.length} URLs sent. Response: ${respText.substring(0, 200)}`);
+    }
+  } catch (err) {
+    pipelineStats.sheetsPushFail++;
+    console.error("[LNR Background] Leads push ERROR:", err.message);
   }
 
-  const url = urls[index];
-  const createOpts = { url, active: false };
-  if (windowId) createOpts.windowId = windowId;
-
-  chrome.tabs.create(createOpts, (tab) => {
-    if (tab) {
-      autoOpenedTabIds.add(tab.id);
-      pipelineStats.tabsOpened++;
-      console.log(`[LNR Background] Tab ${index + 1}/${urls.length} opened in window ${windowId || "default"}: ${url.substring(0, 80)}...`);
-      chrome.action.setBadgeText({ text: `${index + 1}/${urls.length}` });
-    } else {
-      pipelineStats.tabsOpenFailed++;
-      console.error(`[LNR Background] Failed to open tab ${index + 1}/${urls.length}: ${url}`);
-    }
-
-    // Wait 3 seconds before opening the next tab
-    setTimeout(() => openTabsSequentially(urls, index + 1, windowId), 3000);
-  });
+  if (settings.desktopNotifications) {
+    chrome.notifications.create(`lnr-leads-${Date.now()}`, {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "New Leads Added",
+      message: `${newUrls.length} new candidate URL(s) pushed to Google Sheets.`,
+      priority: 1,
+    });
+  }
 }
 
 function broadcastToContentScripts(message) {

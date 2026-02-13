@@ -47,14 +47,20 @@
  *    M1:  Data Confidence
  *    N1:  Rejection Reason
  *
- * 6. Click Extensions > Apps Script
- * 7. Delete any existing code and paste this entire file
- * 8. Click Deploy > New deployment
- * 9. Choose "Web app" as the type
- * 10. Set "Execute as" to "Me"
- * 11. Set "Who has access" to "Anyone"
- * 12. Click Deploy and authorize when prompted
- * 13. Copy the Web app URL — paste it into the extension popup
+ * 6. Create a third tab called "New Leads"
+ * 7. Add these headers in Row 1 of the "New Leads" tab:
+ *    A1:  Timestamp
+ *    B1:  Profile URL
+ *    C1:  Status
+ *
+ * 8. Click Extensions > Apps Script
+ * 9. Delete any existing code and paste this entire file
+ * 10. Click Deploy > New deployment
+ * 11. Choose "Web app" as the type
+ * 12. Set "Execute as" to "Me"
+ * 13. Set "Who has access" to "Anyone"
+ * 14. Click Deploy and authorize when prompted
+ * 15. Copy the Web app URL — paste it into the extension popup
  *
  * NOTE: If you already deployed a previous version, click
  *       Deploy > Manage deployments > Edit (pencil icon) >
@@ -77,6 +83,9 @@ function doPost(e) {
     }
     if (data.action === "add_rejected") {
       return handleAddRejected(data);
+    }
+    if (data.action === "add_leads") {
+      return handleAddLeads(data);
     }
 
     // Default: add qualified candidate to sheet
@@ -260,6 +269,27 @@ function handleRecruiterAlert(data) {
 
   return ContentService.createTextOutput(
     JSON.stringify({ status: "success", emailSent: true })
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Adds raw profile URLs to the "New Leads" tab.
+ * Each URL gets its own row with timestamp and "New" status.
+ */
+function handleAddLeads(data) {
+  var sheet = getOrCreateSheet("New Leads");
+  var urls = data.urls || [];
+  var timestamp = data.timestamp || new Date().toISOString();
+
+  for (var i = 0; i < urls.length; i++) {
+    sheet.insertRowAfter(1);
+    sheet.getRange(2, 1).setValue(timestamp);
+    sheet.getRange(2, 2).setValue(urls[i]);
+    sheet.getRange(2, 3).setValue("New");
+  }
+
+  return ContentService.createTextOutput(
+    JSON.stringify({ status: "success", tab: "New Leads", count: urls.length })
   ).setMimeType(ContentService.MimeType.JSON);
 }
 

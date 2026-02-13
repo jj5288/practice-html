@@ -300,11 +300,10 @@ chrome.runtime.sendMessage({ type: "GET_PIPELINE_STATS" }, (resp) => {
   const ok = (val) => val > 0 ? `<span style="color:#4ecca3">${val}</span>` : `<span style="color:#e94560">${val}</span>`;
   diag.innerHTML = [
     `Bell scans (URLs found): ${ok(s.candidateUrlsFound)}`,
-    `Tabs opened:             ${ok(s.tabsOpened)} (failed: ${s.tabsOpenFailed})`,
+    `URLs → Sheet:            ${ok(s.sheetsPushOk)} (failed: ${s.sheetsPushFail || 0})`,
     `Scrape checks:           ${ok(s.scrapeChecks)}`,
     `Scrapes completed:       ${ok(s.scrapeCompleted)}`,
     `LLM calls:               ${ok(s.llmCalls)} (errors: ${s.llmErrors}, fallbacks: ${s.llmFallbacks})`,
-    `Sheets pushed:           ${ok(s.sheetsPushOk)} (failed: ${s.sheetsPushFail || 0})`,
   ].join("<br>");
 });
 
