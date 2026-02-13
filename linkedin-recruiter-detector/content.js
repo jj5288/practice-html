@@ -115,6 +115,10 @@
       const href = link.href;
       if (!isProfileHref(href)) continue;
 
+      // ── FILTER: Only capture links whose text says "View Candidate" ──
+      const linkText = (link.textContent || "").trim();
+      if (!/view\s+candidate/i.test(linkText)) continue;
+
       // Skip if link is not visible (hidden elements)
       if (link.offsetParent === null && !link.offsetWidth && !link.offsetHeight) continue;
 

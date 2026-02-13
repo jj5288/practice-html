@@ -206,6 +206,10 @@ function saveAutoOpenedTabIds() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CANDIDATE_LINKS_FOUND") {
+    console.log(`[LNR Background] ══════════════════════════════════════`);
+    console.log(`[LNR Background] CANDIDATE_LINKS_FOUND — ${(message.candidateUrls || []).length} URL(s) received`);
+    console.log(`[LNR Background] Webhook URL configured: ${settings.sheetsWebhookUrl ? "YES (" + settings.sheetsWebhookUrl.substring(0, 60) + "...)" : "*** NO — SET THIS IN SETTINGS ***"}`);
+    console.log(`[LNR Background] ══════════════════════════════════════`);
     pushUrlsToSheet(message.candidateUrls, sender);
   }
   if (message.type === "PROFILE_SCRAPED") {
