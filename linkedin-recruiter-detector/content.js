@@ -12,10 +12,17 @@
 (function () {
   "use strict";
 
-  // ─── Guard: skip individual profile pages ──────────────────────────
+  // ─── Guard: only run on main recruiter/talent pages with the bell ───
   const path = new URL(window.location.href).pathname;
-  if (/\/profile\/[^/]+/.test(path) || /\/in\/[^/]+/.test(path)) {
-    console.log("[LNR] Skipping content.js on profile page:", window.location.href);
+  const ALLOWED_PAGES = [
+    "/talent/home",
+    "/talent/hire",
+    "/recruiter/home",
+    "/recruiter",
+  ];
+  const isAllowed = ALLOWED_PAGES.some((p) => path.startsWith(p));
+  if (!isAllowed) {
+    // Silent skip — don't log on every profile page
     return;
   }
 

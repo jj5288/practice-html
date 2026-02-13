@@ -110,18 +110,22 @@
       return;
     }
 
-    // Gather all visible text from the profile page
-    const profileData = extractProfileData();
+    // Check if the page has actually rendered — look for a name (h1) or substantial body text
+    const bodyText = document.body.innerText || "";
+    const hasName = !!document.querySelector("h1");
+    const pageReady = hasName && bodyText.length > 200;
 
-    if (!profileData.rawText || profileData.rawText.length < 50) {
-      // Page likely hasn't loaded yet
+    if (!pageReady) {
       if (scrapeAttempts < MAX_ATTEMPTS) {
-        console.log(`[LNR Scraper] Page not ready (attempt ${scrapeAttempts}/${MAX_ATTEMPTS}, text length: ${(profileData.rawText || "").length}), retrying...`);
+        console.log(`[LNR Scraper] Page not ready (attempt ${scrapeAttempts}/${MAX_ATTEMPTS}, h1: ${hasName}, body text: ${bodyText.length} chars), retrying...`);
         setTimeout(scrapeProfile, randomDelay(1500, 3500));
         return;
       }
       console.log("[LNR Scraper] Max attempts reached — scraping with what we have.");
     }
+
+    // Gather all visible text from the profile page
+    const profileData = extractProfileData();
 
     hasScraped = true;
     console.log("[LNR Scraper] Scraped profile:", profileData.name || "(no name)", "|", profileData.headline || "(no headline)", "| text length:", profileData.rawText.length);
@@ -280,13 +284,31 @@
       data.currentJob = data.headline;
     }
 
-    // --- Full page text as fallback for LLM analysis ---
-    const mainContent =
-      document.querySelector('[class*="profile"]') ||
-      document.querySelector("main") ||
-      document.querySelector('[role="main"]') ||
-      document.body;
-    data.rawText = mainContent.innerText.substring(0, 8000);
+    // --- Full page text for LLM analysis ---
+    // LinkedIn Recruiter uses Ember.js — many selectors match empty containers.
+    // Use document.body.innerText which always has the rendered text.
+    // Try more specific containers first for cleaner text, fall back to body.
+    const candidates = [
+      document.querySelector('[role="main"]'),
+      document.querySelector("main"),
+      document.querySelector("#main"),
+      document.querySelector('[class*="profile-content"]'),
+      document.querySelector('[class*="profile-detail"]'),
+      document.querySelector('[class*="artdeco-card"]'),
+    ];
+    let rawText = "";
+    for (const el of candidates) {
+      if (el) {
+        const text = el.innerText || "";
+        if (text.length > rawText.length) rawText = text;
+      }
+    }
+    // Always fall back to body if nothing better found
+    const bodyText = document.body.innerText || "";
+    if (bodyText.length > rawText.length) rawText = bodyText;
+    data.rawText = rawText.substring(0, 8000);
+
+    console.log(`[LNR Scraper] rawText source: ${rawText.length} chars (body: ${bodyText.length} chars)`);
 
     return data;
   }
